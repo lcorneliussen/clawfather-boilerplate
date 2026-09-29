@@ -30,6 +30,13 @@ Then open a PR as for any other change; the deploy workflow rolls it out.
   your `.github/workflows/`. Diff and port them by hand:
   `diff -u hosting/<profile>/workflows/deploy.yml .github/workflows/deploy.yml`.
 
+## Target must be ahead of your base
+
+`status`, `diff` and `apply` refuse a target that does not contain your
+base commit — applying "backwards" would revert upstream work. While your
+base sits on an unmerged boilerplate branch, name that branch:
+`tools/upstream status <branch>`.
+
 ## Pin to a release
 
 `tools/upstream apply <tag-or-sha>` takes a specific boilerplate commit

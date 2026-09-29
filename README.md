@@ -51,7 +51,7 @@ everywhere — Docker Compose driven by `bin/claw`.
 ```bash
 bin/claw deploy          # builds the image, configures, starts, waits for health
 bin/claw logs            # follow the gateway
-open http://127.0.0.1:18789   # token in .secrets/claw.env
+bin/claw open            # Control UI URL, token included
 ```
 
 Then connect a model provider in the Control UI (Settings → Models). Provider
