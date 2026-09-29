@@ -15,7 +15,7 @@ cp -R "$src/bin" "$src/tools" "$src/.clawfather" "$src/docs" "$repo/"
 mkdir -p "$repo/hosting" "$repo/instance"
 cp -R "$src/hosting/local" "$repo/hosting/"
 sed 's/^CLAW_INSTANCE=.*/CLAW_INSTANCE=secretclaw/' "$src/instance/claw.env.example" > "$repo/instance/claw.env"
-printf 'orchid-internal\n' > "$repo/.clawfather/private-terms"
+printf 'orchid-internal\ncrème-secret\n' > "$repo/.clawfather/private-terms"
 rm -f "$repo/.clawfather/public-emails"
 
 cd "$repo"
@@ -55,11 +55,32 @@ probe clean pass "Generic wording only."
 probe private-email fail "contact someone@private-corp.test"
 probe single-label-email fail "contact someone@private-corp"
 probe punycode-email fail "contact someone@xn--private-corp"
+probe quoted-email fail 'contact "person"@private-corp.test'
+probe spaced-email fail 'contact "first last"@private-corp.test'
+probe domain-literal-email fail 'contact person@[192.0.2.1]'
 probe public-noreply pass "Co-Authored-By: Bot <noreply@anthropic.com>"
 probe example-email pass "ops@example.com"
 probe instance-name fail "runs on secretclaw"
 probe private-term fail "the orchid-internal project"
 probe private-author pass "Generic again." "Private Colleague <colleague@private-corp.test>"
+
+git checkout -q -B probe-encoded-subject main
+printf 'Generic wording.\n' >> docs/upgrading.md
+git commit -qam 'docs: crème-secret'
+if tools/upstream backport HEAD^! -o "$work/out-encoded-subject" >/dev/null 2>&1; then
+  echo 'FAIL: encoded subject escaped the leak check'; failures=$((failures + 1))
+else
+  echo 'ok: encoded subject rejected'
+fi
+git checkout -q -B probe-quoted-path main
+printf 'Generic wording.\n' > 'docs/crème-secret.md'
+git add -A && git commit -qm 'docs: add generic file'
+if tools/upstream backport HEAD^! -o "$work/out-quoted-path" >/dev/null 2>&1; then
+  echo 'FAIL: quoted path escaped the leak check'; failures=$((failures + 1))
+else
+  echo 'ok: quoted path rejected'
+fi
+git checkout -q main
 
 # Use a known docs-changing commit with valid patterns. This must fail only
 # because the requested output directory already contains a patch.

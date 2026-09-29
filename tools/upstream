@@ -261,7 +261,7 @@ leaked_emails() {
   if [[ -f .clawfather/public-emails ]]; then
     allowed+=$'\n'"$(grep -v '^[[:space:]]*\(#\|$\)' .clawfather/public-emails || true)"
   fi
-  { grep -Eo '[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*' "$file" || true; } | sort -u |
+  { grep -Eo '("([^"\\]|\\.)*"|[A-Za-z0-9._%+-]+)@([A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*|\[[^]]+\])' "$file" || true; } | sort -u |
     while IFS= read -r email; do
       local lower entry ok=false
       lower="$(tr '[:upper:]' '[:lower:]' <<<"$email")"
@@ -316,8 +316,18 @@ cmd_backport() {
       "$file" > "$file.tmp" && mv "$file.tmp" "$file"
   done
 
+  # Scan decoded source messages and path names as well: format-patch may MIME
+  # encode non-ASCII subjects and quote non-ASCII paths, hiding a restricted
+  # term from a grep of the patch bytes alone.
+  local source_scan
+  source_scan="$(mktemp)"
+  # shellcheck disable=SC2064
+  trap "rm -f '$source_scan'" EXIT
+  git -c core.quotePath=false log --encoding=UTF-8 --format='%B' --name-only \
+    "$range" -- "${paths[@]}" > "$source_scan" || die "leak check: cannot read source metadata"
+
   # The whole patch leaves — headers, message, diff — so the whole patch is
-  # checked. A pattern grep cannot parse stops the export: a check that
+  # checked too. A pattern grep cannot parse stops the export: a check that
   # cannot run must not pass.
   # Each helper's output is collected first: a helper that fails must stop
   # the export, not look like "nothing found" to a loop reading its output.
@@ -327,14 +337,14 @@ cmd_backport() {
     [[ -n "$pattern" ]] || continue
     status=0; grep -Eq -- "$pattern" /dev/null 2>/dev/null || status=$?
     ((status != 2)) || die "leak check: invalid pattern /$pattern/ — fix it in .clawfather/private-terms"
-    for file in "${patches[@]}"; do
+    for file in "${patches[@]}" "$source_scan"; do
       if grep -Eiq -- "$pattern" "$file"; then
         say "leak check: /$pattern/ matches in ${file##*/}"
         hits=$((hits + 1))
       fi
     done
   done <<<"$patterns"
-  for file in "${patches[@]}"; do
+  for file in "${patches[@]}" "$source_scan"; do
     local email emails
     emails="$(leaked_emails "$file" "$author_email")" || die "leak check: e-mail scan failed on ${file##*/}"
     while IFS= read -r email; do
@@ -344,6 +354,9 @@ cmd_backport() {
     done <<<"$emails"
   done
   ((hits == 0)) || die "$hits leak-check hit(s) — generalize the change, then export again (patches left in $out)"
+
+  rm -f "$source_scan"
+  trap - EXIT
 
   say "${#patches[@]} patch(es) in $out, limited to upstream-owned paths, authored as $author"
   say "in a boilerplate checkout: git switch -c <slug> && git am -3 $out/*.patch"

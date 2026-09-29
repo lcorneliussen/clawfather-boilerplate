@@ -5,3 +5,6 @@
 .git/
 **/.terraform/
 **/*.tfstate*
+**/*.tfplan
+**/*.tfvars
+**/backend.hcl
