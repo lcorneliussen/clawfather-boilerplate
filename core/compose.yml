@@ -1,0 +1,76 @@
+# Core runtime contract: the OpenClaw gateway and nothing else.
+#
+# Upstream-owned. `bin/claw` always composes three files, in this order:
+#
+#   core/compose.yml                  this file — the gateway, its mounts and hardening
+#   hosting/<profile>/compose.yml     the profile's front door (proxy, tunnel, auth env)
+#   site/compose.yml                  the site's additions (extra services, mounts, env)
+#
+# Later files extend or override earlier ones (Compose merge rules), so a site
+# adds a database, a mount or an env var in site/compose.yml without touching
+# this file. Every one-off OpenClaw command (`claw openclaw …`, configure,
+# backup, doctor) runs as `compose run claw …` and therefore sees exactly the
+# same env and mounts as the gateway itself.
+#
+# Variables come from site/claw.env (committed, non-secret) and
+# .secrets/claw.env (ignored); `bin/claw` exports both.
+name: ${CLAW_INSTANCE:?set CLAW_INSTANCE in site/claw.env}
+
+services:
+  claw:
+    image: ${CLAW_IMAGE:?CLAW_IMAGE is derived by bin/claw}
+    container_name: ${CLAW_INSTANCE}-claw
+    command: ["node", "dist/index.js", "gateway", "--allow-unconfigured", "--bind", "lan", "--port", "18789"]
+    init: true
+    restart: unless-stopped
+    environment:
+      HOME: /home/node
+      OPENCLAW_HOME: /home/node
+      OPENCLAW_STATE_DIR: /home/node/.openclaw
+      OPENCLAW_CONFIG_PATH: ${OPENCLAW_CONFIG_PATH:-/home/node/.openclaw/openclaw.json}
+      OPENCLAW_CONFIG_DIR: /home/node/.openclaw
+      OPENCLAW_WORKSPACE_DIR: /home/node/.openclaw/workspace
+      OPENCLAW_GATEWAY_PORT: "18789"
+      # The deployment, not the gateway, owns restarts and repairs.
+      OPENCLAW_SERVICE_REPAIR_POLICY: external
+      TZ: ${CLAW_TZ:-UTC}
+    volumes:
+      - ${CLAW_DATA}/state:/home/node/.openclaw
+      - ${CLAW_DATA}/workspace:/home/node/.openclaw/workspace
+      - ${CLAW_DATA}/workspaces:/home/node/.openclaw/workspaces
+      - ${CLAW_DATA}/auth-profile-secrets:/home/node/.config/openclaw
+      - ${CLAW_DATA}/gh-config:/home/node/.config/gh
+      - ${CLAW_DATA}/backups:/backups
+    # Operations port: host loopback only. The profile's front door is the
+    # only way in from outside.
+    ports:
+      - "127.0.0.1:${CLAW_PORT:-18789}:18789"
+    networks:
+      - claw
+    cap_drop:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+    healthcheck:
+      test: ["CMD", "node", "dist/docker-healthcheck.js"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+networks:
+  # Fixed subnet so a profile can pin its proxy to one address and the gateway
+  # can trust exactly that address (gateway.trustedProxies). Dynamic addresses
+  # come from the upper half, so they never collide with a pinned one.
+  claw:
+    name: ${CLAW_INSTANCE}
+    ipam:
+      config:
+        - subnet: ${CLAW_SUBNET:-172.30.0.0/24}
+          ip_range: ${CLAW_IP_RANGE:-172.30.0.128/25}

@@ -1,0 +1,310 @@
+#!/usr/bin/env bash
+# claw — the one command that runs a team claw, on a workstation or on a host.
+#
+# Upstream-owned. Everything that touches the gateway goes through here, so
+# the runtime contract (env, mounts, hardening) lives in exactly one place:
+# the composed files core/compose.yml + hosting/<profile>/compose.yml +
+# site/compose.yml. CI deploys by syncing the repository to the host and
+# running `bin/claw deploy` there; an operator runs the same command.
+#
+# Configuration, in load order (later wins):
+#   hosting/<profile>/profile.env   profile defaults (auth mode, data root, …)
+#   site/claw.env                   this deployment — committed, non-secret
+#   .secrets/claw.env               this deployment's secrets — ignored by git
+# The environment of the caller wins over all three.
+set -euo pipefail
+
+CLAW_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export CLAW_REPO
+
+usage() {
+  cat <<'EOF'
+Usage: bin/claw <command> [args]
+
+Lifecycle
+  init              create the data directories (and a local token, in token mode)
+  build [--push]    build the core image, then the site image FROM it
+  deploy            the full, ordered rollout — see below
+  up | down         start / stop every service
+  status            compose ps
+  logs [service]    follow logs (default: claw)
+  health [tries]    wait until the gateway answers /healthz on host loopback
+
+Gateway operations (one-off containers with the gateway's exact contract)
+  openclaw ARGS...  run the OpenClaw CLI against the state
+  configure         build and validate the next config (not yet live)
+  sync-workspaces   copy site/workspaces/<agent>/ into the agents' workspaces
+  backup            stop the gateway, write a verified backup, restart it
+  doctor            offline migrations with the gateway stopped
+
+Plumbing
+  env               print the resolved non-secret configuration
+  compose ARGS...   docker compose with the three files and the env
+
+deploy = init, pull/build, backup, sync-workspaces, configure, stop gateway,
+publish the candidate config, doctor, up, health. A failure after publishing
+restores the previous config and starts the gateway again.
+EOF
+}
+
+die() { echo "claw: $*" >&2; exit 1; }
+say() { echo "claw: $*" >&2; }
+
+load_env() {
+  local file
+  # The profile must be known before its defaults can be read.
+  if [[ -z "${CLAW_PROFILE:-}" && -f "$CLAW_REPO/site/claw.env" ]]; then
+    CLAW_PROFILE="$(sed -n 's/^CLAW_PROFILE=//p' "$CLAW_REPO/site/claw.env" | tail -1)"
+  fi
+  : "${CLAW_PROFILE:?set CLAW_PROFILE in site/claw.env (local, azure, hetzner-cloudflare)}"
+  [[ -d "$CLAW_REPO/hosting/$CLAW_PROFILE" ]] || die "unknown profile: $CLAW_PROFILE"
+
+  # Caller env wins: remember what was set before sourcing anything.
+  # `export -p` prints `declare -x`, which would re-declare them as locals of
+  # this function; `export` keeps them global.
+  local saved
+  saved="$(export -p | sed 's/^declare -x /export /')"
+  set -a
+  for file in "$CLAW_REPO/hosting/$CLAW_PROFILE/profile.env" \
+              "$CLAW_REPO/site/claw.env" \
+              "$CLAW_REPO/.secrets/claw.env"; do
+    # shellcheck disable=SC1090
+    [[ -f "$file" ]] && . "$file"
+  done
+  set +a
+  eval "$saved"
+
+  # Names defined by the three files, forwarded into one-off containers so
+  # configure steps see the same values bin/claw does.
+  CLAW_ENV_NAMES="$(cat "$CLAW_REPO/hosting/$CLAW_PROFILE/profile.env" \
+      "$CLAW_REPO/site/claw.env" "$CLAW_REPO/.secrets/claw.env" 2>/dev/null |
+    sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' | sort -u | tr '\n' ' ')"
+
+  : "${CLAW_INSTANCE:?set CLAW_INSTANCE in site/claw.env}"
+  [[ "$CLAW_INSTANCE" =~ ^[a-z][a-z0-9-]*$ ]] || die "CLAW_INSTANCE must be lowercase [a-z0-9-]"
+  export CLAW_PROFILE CLAW_INSTANCE
+  export CLAW_DATA="${CLAW_DATA:-/srv/$CLAW_INSTANCE}"
+  [[ "$CLAW_DATA" = /* ]] || CLAW_DATA="$CLAW_REPO/$CLAW_DATA"
+  export CLAW_PORT="${CLAW_PORT:-18789}"
+  export CLAW_IMAGE_NAME="${CLAW_IMAGE_NAME:-$CLAW_INSTANCE-openclaw}"
+  export CLAW_IMAGE_TAG="${CLAW_IMAGE_TAG:-local}"
+  export CLAW_IMAGE="${CLAW_IMAGE:-$CLAW_IMAGE_NAME:$CLAW_IMAGE_TAG}"
+  export CLAW_CORE_IMAGE="${CLAW_CORE_IMAGE:-$CLAW_IMAGE_NAME-core:$CLAW_IMAGE_TAG}"
+}
+
+compose() {
+  docker compose \
+    --project-directory "$CLAW_REPO" \
+    -f "$CLAW_REPO/core/compose.yml" \
+    -f "$CLAW_REPO/hosting/$CLAW_PROFILE/compose.yml" \
+    -f "$CLAW_REPO/site/compose.yml" \
+    "$@"
+}
+
+# One-off container with the gateway's contract. Never starts dependencies:
+# offline operations must not need the rest of the stack.
+run_claw() {
+  local name env_args=()
+  for name in $CLAW_ENV_NAMES CLAW_PROFILE CLAW_INSTANCE CLAW_PORT; do
+    env_args+=(-e "$name")
+  done
+  compose run --rm --no-deps -T "${env_args[@]}" \
+    -v "$CLAW_REPO/core/configure:/claw/core/configure:ro" \
+    -v "$CLAW_REPO/site/configure.d:/claw/site/configure.d:ro" \
+    -v "$CLAW_REPO/site/workspaces:/claw/site/workspaces:ro" \
+    claw "$@"
+}
+
+gateway_container() { echo "$CLAW_INSTANCE-claw"; }
+
+gateway_running() {
+  [[ "$(docker inspect --format '{{.State.Running}}' "$(gateway_container)" 2>/dev/null)" == true ]]
+}
+
+gateway_stop() { compose stop claw >/dev/null 2>&1 || true; }
+
+cmd_init() {
+  local dirs=(state workspace workspaces auth-profile-secrets gh-config backups) d sudo=()
+  local missing=()
+  # Sites that mount more data (site/compose.yml) list the extra directories
+  # in CLAW_EXTRA_DATA_DIRS, space-separated, relative to CLAW_DATA.
+  # shellcheck disable=SC2206
+  dirs+=(${CLAW_EXTRA_DATA_DIRS:-})
+  for d in "${dirs[@]}"; do
+    [[ -n "$d" && ! -d "$CLAW_DATA/$d" ]] && missing+=("$CLAW_DATA/$d")
+  done
+  if ((${#missing[@]})); then
+    if [[ "$(uname -s)" == Linux ]]; then
+      # The gateway runs as uid 1000 (node) in the image.
+      [[ $EUID -eq 0 ]] || sudo=(sudo)
+      ${sudo[@]+"${sudo[@]}"} install -d -o 1000 -g 1000 -m 0750 "${missing[@]}"
+    else
+      mkdir -p "${missing[@]}"
+    fi
+    say "created ${#missing[@]} data directories under $CLAW_DATA"
+  fi
+
+  if [[ "${CLAW_AUTH_MODE:-}" == token && -z "${OPENCLAW_GATEWAY_TOKEN:-}" ]]; then
+    install -d -m 0700 "$CLAW_REPO/.secrets"
+    local token
+    token="$(openssl rand -hex 32)"
+    printf 'OPENCLAW_GATEWAY_TOKEN=%s\n' "$token" >> "$CLAW_REPO/.secrets/claw.env"
+    chmod 0600 "$CLAW_REPO/.secrets/claw.env"
+    export OPENCLAW_GATEWAY_TOKEN="$token"
+    say "generated a gateway token in .secrets/claw.env"
+  fi
+}
+
+cmd_build() {
+  local push=false
+  [[ "${1:-}" == --push ]] && push=true
+  local args=(--pull)
+  [[ -n "${CLAW_PLATFORM:-}" ]] && args+=(--platform "$CLAW_PLATFORM")
+  docker build "${args[@]}" \
+    ${OPENCLAW_IMAGE:+--build-arg "OPENCLAW_IMAGE=$OPENCLAW_IMAGE"} \
+    --tag "$CLAW_CORE_IMAGE" "$CLAW_REPO/core/image"
+  # The site image builds FROM the local core image, so no --pull here.
+  docker build ${CLAW_PLATFORM:+--platform "$CLAW_PLATFORM"} \
+    --build-arg "CORE_IMAGE=$CLAW_CORE_IMAGE" \
+    --tag "$CLAW_IMAGE" --file "$CLAW_REPO/site/image/Dockerfile" "$CLAW_REPO"
+  if $push; then docker push "$CLAW_IMAGE"; fi
+}
+
+cmd_configure() {
+  run_claw sh /claw/core/configure/run.sh
+}
+
+cmd_sync_workspaces() {
+  # Files in site/workspaces/<agent>/ replace their copies in the agent's
+  # workspace; whatever the agent wrote itself (memory, notes) is left alone.
+  # shellcheck disable=SC2016 # expanded inside the container
+  run_claw sh -euc '
+    cd /claw/site/workspaces
+    for agent in */; do
+      [ -d "$agent" ] || continue
+      mkdir -p "/home/node/.openclaw/workspaces/$agent"
+      cp -R "$agent". "/home/node/.openclaw/workspaces/$agent"
+      echo "claw: synced workspace ${agent%/}" >&2
+    done'
+}
+
+cmd_backup() {
+  local was_running=false
+  gateway_running && was_running=true
+  if ! docker container inspect "$(gateway_container)" >/dev/null 2>&1 && \
+     [[ ! -f "$CLAW_DATA/state/openclaw.json" ]]; then
+    say "no gateway state yet; skipping backup"
+    return 0
+  fi
+  gateway_stop
+  local status=0
+  # The archiver can leave an empty staging directory behind on some bind
+  # mounts; remove only empty ones.
+  # shellcheck disable=SC2016 # expanded inside the container
+  run_claw sh -euc 'node dist/index.js backup create --output /backups --verify
+    find /backups -maxdepth 1 -type d -name ".openclaw-backup-publish-*" -empty -delete' || status=$?
+  if $was_running; then compose start claw >/dev/null 2>&1 || true; fi
+  return "$status"
+}
+
+cmd_doctor() {
+  gateway_stop
+  run_claw node dist/index.js doctor --fix --non-interactive
+}
+
+cmd_health() {
+  local tries="${1:-180}" i
+  for ((i = 1; i <= tries; i++)); do
+    if curl --fail --silent --max-time 5 "http://127.0.0.1:$CLAW_PORT/healthz" >/dev/null; then
+      say "gateway healthy on 127.0.0.1:$CLAW_PORT"
+      return 0
+    fi
+    sleep 2
+  done
+  docker logs --tail 200 "$(gateway_container)" >&2 || true
+  die "gateway did not become healthy"
+}
+
+publish_config() {
+  local state="$CLAW_DATA/state"
+  # shellcheck disable=SC2016 # expanded inside the container
+  run_claw sh -euc '
+    s=/home/node/.openclaw
+    [ -f "$s/openclaw.candidate.json" ] || { echo "claw: no candidate config" >&2; exit 1; }
+    if [ -f "$s/openclaw.json" ]; then cp -p "$s/openclaw.json" "$s/openclaw.previous.json"; fi
+    mv -f "$s/openclaw.candidate.json" "$s/openclaw.json"'
+  say "published candidate config (previous kept as ${state##*/}/openclaw.previous.json)"
+}
+
+restore_previous_config() {
+  # shellcheck disable=SC2016 # expanded inside the container
+  run_claw sh -euc '
+    s=/home/node/.openclaw
+    [ -f "$s/openclaw.previous.json" ] && cp -p "$s/openclaw.previous.json" "$s/openclaw.json"' || true
+}
+
+cmd_deploy() {
+  cmd_init
+  if [[ "${CLAW_BUILD:-auto}" == yes ]] || \
+     { [[ "${CLAW_BUILD:-auto}" == auto ]] && ! docker image inspect "$CLAW_IMAGE" >/dev/null 2>&1 && \
+       ! docker pull "$CLAW_IMAGE" >/dev/null 2>&1; }; then
+    cmd_build
+  fi
+  # Front-door and site services; the gateway image was handled above.
+  local others
+  others="$(compose config --services | grep -vx claw || true)"
+  # shellcheck disable=SC2086 # one service name per word
+  [[ -z "$others" ]] || compose pull --quiet --ignore-pull-failures $others || true
+  cmd_backup
+  cmd_sync_workspaces
+  cmd_configure
+
+  gateway_stop
+  publish_config
+  if ! { cmd_doctor && compose up -d --remove-orphans && cmd_health; }; then
+    say "rollout failed; restoring the previous config"
+    gateway_stop
+    restore_previous_config
+    compose up -d --remove-orphans || true
+    die "deploy failed (previous config restored; backups in $CLAW_DATA/backups)"
+  fi
+  say "deployed $CLAW_IMAGE ($CLAW_PROFILE)"
+}
+
+cmd_env() {
+  local v
+  for v in CLAW_PROFILE CLAW_INSTANCE CLAW_HOSTNAME CLAW_DATA CLAW_PORT CLAW_IMAGE \
+           CLAW_CORE_IMAGE CLAW_AUTH_MODE CLAW_TZ; do
+    printf '%s=%s\n' "$v" "${!v:-}"
+  done
+}
+
+main() {
+  local cmd="${1:-}"
+  [[ -n "$cmd" ]] || { usage; exit 1; }
+  shift
+  case "$cmd" in
+    -h|--help|help) usage; return ;;
+  esac
+  load_env
+  case "$cmd" in
+    init) cmd_init ;;
+    build) cmd_build "$@" ;;
+    deploy) cmd_deploy ;;
+    up) compose up -d --remove-orphans "$@" ;;
+    down) compose down "$@" ;;
+    status) compose ps "$@" ;;
+    logs) compose logs -f "${@:-claw}" ;;
+    health) cmd_health "$@" ;;
+    openclaw) run_claw node dist/index.js "$@" ;;
+    configure) cmd_configure ;;
+    sync-workspaces) cmd_sync_workspaces ;;
+    backup) cmd_backup ;;
+    doctor) cmd_doctor ;;
+    env) cmd_env ;;
+    compose) compose "$@" ;;
+    *) usage; exit 1 ;;
+  esac
+}
+
+main "$@"
