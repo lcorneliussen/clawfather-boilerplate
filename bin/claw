@@ -133,7 +133,22 @@ gateway_running() {
   [[ "$(docker inspect --format '{{.State.Running}}' "$(gateway_container)" 2>/dev/null)" == true ]]
 }
 
-gateway_stop() { compose stop claw >/dev/null 2>&1 || true; }
+gateway_stop() {
+  # Offline operations must fail closed: a successful stop request alone is
+  # not evidence that the writer has stopped (for example with a restart).
+  compose stop claw >/dev/null || return 1
+  local ids id state
+  ids="$(compose ps --all --quiet claw)" || return 1
+  # An empty, successful listing is normal on the first deployment. A Docker
+  # error must not be confused with that case.
+  for id in $ids; do
+    state="$(docker inspect --format '{{.State.Running}} {{.State.Restarting}}' "$id")" || return 1
+    if [[ "$state" != 'false false' ]]; then
+      say "gateway did not stop; refusing offline state changes"
+      return 1
+    fi
+  done
+}
 
 cmd_init() {
   local dirs=(state workspace workspaces auth-profile-secrets gh-config backups) d sudo=()
@@ -208,7 +223,7 @@ cmd_backup() {
     say "no gateway state yet; skipping backup"
     return 0
   fi
-  gateway_stop
+  gateway_stop || return 1
   local status=0
   # The archiver can leave an empty staging directory behind on some bind
   # mounts; remove only empty ones.
@@ -220,7 +235,7 @@ cmd_backup() {
 }
 
 cmd_doctor() {
-  gateway_stop
+  gateway_stop || return 1
   run_claw node dist/index.js doctor --fix --non-interactive
 }
 
@@ -271,11 +286,11 @@ cmd_deploy() {
   cmd_sync_workspaces
   cmd_configure
 
-  gateway_stop
+  gateway_stop || return 1
   publish_config
   if ! { cmd_doctor && compose up -d --remove-orphans && cmd_health; }; then
     say "rollout failed; restoring the previous config"
-    gateway_stop
+    gateway_stop || return 1
     restore_previous_config
     compose up -d --remove-orphans || true
     die "deploy failed (previous config restored; backups in $CLAW_DATA/backups)"

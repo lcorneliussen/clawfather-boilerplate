@@ -24,6 +24,8 @@ jobs:
         run: tests/upstream_backport_test.sh
       - name: Upgrade apply tests
         run: tests/upstream_apply_test.sh
+      - name: Gateway stop failure tests
+        run: python3 -I tests/gateway_stop_test.py
 
   local-e2e:
     # The local profile runs for real: build, configure, doctor, start, health,
