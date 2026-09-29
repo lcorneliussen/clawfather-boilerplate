@@ -1,0 +1,31 @@
+---
+# Host bootstrap for the hetzner-cloudflare profile. Upstream-owned.
+#
+# Prepares the host and nothing more: hardening, Docker with the compose
+# plugin, the deploy user, the data volume at /srv/<instance>, and the
+# checkout directory /opt/<instance>. Everything that runs — the gateway and
+# cloudflared — is the compose stack that `bin/claw deploy` rolls out.
+- name: Bootstrap the claw host
+  hosts: all
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Require host inputs
+      ansible.builtin.assert:
+        that:
+          - claw_instance is defined
+          - claw_instance is match('^[a-z][a-z0-9-]*$')
+          - claw_volume_device is defined
+          - claw_volume_device is match('^/dev/')
+          - deploy_authorized_keys is defined
+          - deploy_authorized_keys | length > 0
+          - deploy_authorized_keys | select('match', '^(ssh-|ecdsa-|sk-)') | list | length == deploy_authorized_keys | length
+        fail_msg: >-
+          Set claw_instance, claw_volume_device (tofu output volume_linux_device)
+          and deploy_authorized_keys in inventory.yml.
+
+  roles:
+    - base
+    - docker
+    - claw_host

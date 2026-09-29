@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Static checks for the hetzner-cloudflare profile. Upstream-owned; run by tools/check.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+# shellcheck disable=SC2016 # runs inside the container
+docker run --rm -v "$PWD/infra:/w" -w /w --entrypoint sh ghcr.io/opentofu/opentofu:1.12.6 -c '
+  set -e
+  trap "rm -rf .terraform" EXIT
+  tofu fmt -check -recursive
+  tofu init -backend=false -input=false >/dev/null
+  tofu validate'
+echo "ok: opentofu"
+
+if command -v ansible-playbook >/dev/null; then
+  (cd ansible && ANSIBLE_CONFIG=ansible.cfg ansible-playbook --syntax-check -i inventory.example.yml site.yml >/dev/null)
+  echo "ok: ansible syntax"
+else
+  status=0
+  docker run --rm -v "$PWD/ansible:/w:ro" -w /w python:3.13-slim sh -c '
+    pip install --quiet --disable-pip-version-check --root-user-action=ignore ansible-core==2.21.4 >/dev/null 2>&1 &&
+    ANSIBLE_CONFIG=ansible.cfg ansible-playbook --syntax-check -i inventory.example.yml site.yml' >/dev/null || status=$?
+  case "$status" in
+    0) echo "ok: ansible syntax" ;;
+    # Some arm64 VMs (colima/vz) cannot run the container's ansible; CI can.
+    132) echo "skipped: ansible syntax (container hit an illegal instruction here; install ansible-core or rely on CI)" ;;
+    *) exit "$status" ;;
+  esac
+fi

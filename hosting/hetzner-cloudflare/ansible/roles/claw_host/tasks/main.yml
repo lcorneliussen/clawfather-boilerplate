@@ -1,0 +1,31 @@
+---
+# The persistent volume becomes the data root. bin/claw creates the
+# directories inside it (`bin/claw init`, run by every deploy), so the list
+# of data directories lives in one place.
+- name: Mount the persistent data volume
+  ansible.posix.mount:
+    path: "{{ claw_data_root }}"
+    src: "{{ claw_volume_device }}"
+    fstype: ext4
+    # nofail: a detached volume must not keep the host from booting into a
+    # state where it can be repaired.
+    opts: defaults,nofail
+    state: mounted
+
+- name: Restrict the data root
+  ansible.builtin.file:
+    path: "{{ claw_data_root }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# The deploy workflow rsyncs the repository here and writes .secrets/ inside
+# it; the deploy user owns the tree, nobody else can read it.
+- name: Create the repository checkout directory
+  ansible.builtin.file:
+    path: "{{ claw_repo_dir }}"
+    state: directory
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_user }}"
+    mode: "0750"

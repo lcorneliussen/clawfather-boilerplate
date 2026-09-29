@@ -1,0 +1,12 @@
+# Defaults; override per host in inventory.yml.
+deploy_user: deploy
+
+# Must match what bin/claw derives: CLAW_DATA=/srv/$CLAW_INSTANCE, and the
+# deploy workflow syncs the repository to /opt/$CLAW_INSTANCE.
+claw_data_root: "/srv/{{ claw_instance }}"
+claw_repo_dir: "/opt/{{ claw_instance }}"
+
+# The compose network (core/compose.yml, CLAW_SUBNET). SSH through the tunnel
+# arrives from cloudflared's address in it; fail2ban must never ban that,
+# or one bad login would lock every Access user out.
+claw_subnet: 172.30.0.0/24

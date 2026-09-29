@@ -1,0 +1,24 @@
+# Copy to inventory.yml (ignored by git). One host per instance.
+all:
+  hosts:
+    claw-host:
+      # First run: the public address from `tofu output server_ipv4`, as root
+      # with the bootstrap key, from a CIDR listed in ssh_source_cidrs. The
+      # tunnel does not exist until the first deploy starts cloudflared.
+      ansible_host: 203.0.113.10
+      ansible_user: root
+
+      # Later runs can go through Access like CI does, as the deploy user:
+      # ansible_host: ssh.example.com
+      # ansible_user: deploy
+      # ansible_ssh_common_args: "-o ProxyCommand='cloudflared access ssh --hostname %h'"
+
+      claw_instance: teamclaw
+      # From `tofu output volume_linux_device`.
+      claw_volume_device: /dev/disk/by-id/scsi-0HC_Volume_REPLACE_ME
+
+      # Everyone who may SSH in as the deploy user: operators and the CI
+      # deploy key. Public keys only, so plain inventory is fine.
+      deploy_authorized_keys:
+        - ssh-ed25519 REPLACE_ME operator
+        - ssh-ed25519 REPLACE_ME ci-deploy
