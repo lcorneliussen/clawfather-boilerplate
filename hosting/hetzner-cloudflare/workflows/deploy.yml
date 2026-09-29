@@ -45,9 +45,6 @@ jobs:
       CLAW_PLATFORM: ${{ vars.CLAW_PLATFORM }}
       SSH_HOST: ${{ vars.CLAW_SSH_HOSTNAME }}
       DEPLOY_USER: ${{ vars.CLAW_DEPLOY_USER || 'deploy' }}
-      # `cloudflared access ssh` authenticates to Access with these.
-      TUNNEL_SERVICE_TOKEN_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-      TUNNEL_SERVICE_TOKEN_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
 
     steps:
       - uses: actions/checkout@v5
@@ -115,6 +112,8 @@ jobs:
         env:
           DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
           SSH_HOST_PUBLIC_KEY: ${{ vars.SSH_HOST_PUBLIC_KEY }}
+          TUNNEL_SERVICE_TOKEN_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          TUNNEL_SERVICE_TOKEN_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
           set -euo pipefail
           [[ -n "$SSH_HOST_PUBLIC_KEY" ]] || { echo "set the SSH_HOST_PUBLIC_KEY repository variable" >&2; exit 1; }
@@ -142,6 +141,9 @@ jobs:
           fi
 
       - name: Sync the repository to the host
+        env:
+          TUNNEL_SERVICE_TOKEN_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          TUNNEL_SERVICE_TOKEN_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
           set -euo pipefail
           # .secrets/ and .data/ exist only on the host; excluded paths are
@@ -152,6 +154,8 @@ jobs:
 
       - name: Write the host env (.secrets/claw.env)
         env:
+          TUNNEL_SERVICE_TOKEN_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          TUNNEL_SERVICE_TOKEN_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
           CLOUDFLARE_TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
           CLAW_SECRETS_ENV: ${{ secrets.CLAW_SECRETS_ENV }}
         run: |
@@ -179,6 +183,8 @@ jobs:
       - name: Pull the image on the host
         env:
           REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          TUNNEL_SERVICE_TOKEN_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          TUNNEL_SERVICE_TOKEN_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
           set -euo pipefail
           # The job token expires with the job; the host keeps no registry
@@ -190,6 +196,9 @@ jobs:
           ssh "$SSH_HOST" "docker pull --quiet '$CLAW_IMAGE'"
 
       - name: Roll out with bin/claw deploy
+        env:
+          TUNNEL_SERVICE_TOKEN_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          TUNNEL_SERVICE_TOKEN_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
           set -euo pipefail
           # The rollout runs as a transient systemd unit, not in the SSH
@@ -236,6 +245,9 @@ jobs:
           esac
 
       - name: Show the stack
+        env:
+          TUNNEL_SERVICE_TOKEN_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          TUNNEL_SERVICE_TOKEN_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: ssh "$SSH_HOST" "cd '$REMOTE_DIR' && bin/claw status"
 
       - name: Remove temporary credentials

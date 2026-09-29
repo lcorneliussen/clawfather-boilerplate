@@ -8,7 +8,7 @@
 #                                 the same values the gateway uses
 #   instance/infra/terraform.tfvars   the rest of the non-secret inputs
 #   instance/infra/backend.hcl        the state bucket (no credentials)
-#   environment secrets           see `env` below
+#   environment secrets           scoped to the OpenTofu steps below
 name: Infrastructure
 
 on:
@@ -44,14 +44,6 @@ jobs:
     env:
       TF_IN_AUTOMATION: "true"
       TF_INPUT: "false"
-      HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      # S3-compatible state bucket credentials (e.g. an R2 API token).
-      AWS_ACCESS_KEY_ID: ${{ secrets.TOFU_STATE_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.TOFU_STATE_SECRET_ACCESS_KEY }}
-      # Optional: only when Access should offer a GitHub login created here.
-      TF_VAR_github_oauth_client_id: ${{ secrets.GITHUB_OAUTH_CLIENT_ID }}
-      TF_VAR_github_oauth_client_secret: ${{ secrets.GITHUB_OAUTH_CLIENT_SECRET }}
 
     steps:
       - uses: actions/checkout@v5
@@ -105,6 +97,11 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Check credentials
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.TOFU_STATE_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TOFU_STATE_SECRET_ACCESS_KEY }}
         run: |
           set -euo pipefail
           for v in HCLOUD_TOKEN CLOUDFLARE_API_TOKEN AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
@@ -112,6 +109,9 @@ jobs:
           done
 
       - name: Initialize remote state
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.TOFU_STATE_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TOFU_STATE_SECRET_ACCESS_KEY }}
         run: tofu init -backend-config="$GITHUB_WORKSPACE/instance/infra/backend.hcl"
 
       - name: Check formatting and validate
@@ -120,11 +120,25 @@ jobs:
           tofu validate
 
       - name: Plan
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.TOFU_STATE_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TOFU_STATE_SECRET_ACCESS_KEY }}
+          TF_VAR_github_oauth_client_id: ${{ secrets.GITHUB_OAUTH_CLIENT_ID }}
+          TF_VAR_github_oauth_client_secret: ${{ secrets.GITHUB_OAUTH_CLIENT_SECRET }}
         run: tofu plan -var-file="$GITHUB_WORKSPACE/instance/infra/terraform.tfvars" -out=infrastructure.tfplan
 
       # Applies exactly the plan printed above, never a fresh one.
       - name: Apply the plan
         if: inputs.operation == 'apply'
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.TOFU_STATE_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TOFU_STATE_SECRET_ACCESS_KEY }}
+          TF_VAR_github_oauth_client_id: ${{ secrets.GITHUB_OAUTH_CLIENT_ID }}
+          TF_VAR_github_oauth_client_secret: ${{ secrets.GITHUB_OAUTH_CLIENT_SECRET }}
         run: tofu apply infrastructure.tfplan
 
       - name: Next steps
