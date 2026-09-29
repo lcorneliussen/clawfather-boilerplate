@@ -195,18 +195,26 @@ cmd_divergence() {
 }
 
 # Terms that must never reach the public boilerplate: the site's own
-# identifiers from site/claw.env, e-mail addresses, and whatever the site
-# lists in .clawfather/private-terms (one extended regex per line).
+# identifiers from site/claw.env and whatever the site lists in
+# .clawfather/private-terms (one extended regex per line). E-mail addresses
+# are checked separately (leaked_emails).
 leak_patterns() {
-  local v
+  local v value
   for v in CLAW_INSTANCE CLAW_HOSTNAME CLAW_IMAGE_NAME; do
-    local value
     value="$(sed -n "s/^$v=//p" site/claw.env 2>/dev/null | tail -1 | tr -d "\"'")"
     [[ -n "$value" ]] && printf '%s\n' "$value"
   done
-  echo '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
   [[ -f .clawfather/private-terms ]] && grep -v '^[[:space:]]*\(#\|$\)' .clawfather/private-terms
   return 0
+}
+
+# Every e-mail address in FILE except the public kinds: no-reply addresses
+# (attribution trailers) and example domains.
+leaked_emails() {
+  sed '1,/^Subject:/{/^Subject:/!d;}' "$1" |
+    grep -Eo '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' |
+    grep -Eiv '^(no-?reply|[0-9]+\+[^@]+)@|@users\.noreply\.github\.com$|@example\.(com|org|net)$' |
+    sort -u
 }
 
 cmd_backport() {
@@ -233,6 +241,14 @@ cmd_backport() {
       fi
     done
   done < <(leak_patterns)
+  for file in "${patches[@]}"; do
+    local email
+    while IFS= read -r email; do
+      [[ -n "$email" ]] || continue
+      say "leak check: e-mail $email in ${file##*/}"
+      hits=$((hits + 1))
+    done < <(leaked_emails "$file")
+  done
   ((hits == 0)) || die "$hits leak-check hit(s) — generalize the change, then export again (patches left in $out)"
 
   say "${#patches[@]} patch(es) in $out, limited to upstream-owned paths"
