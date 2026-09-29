@@ -17,3 +17,7 @@ backend.hcl
 hosting/*/ansible/inventory.yml
 
 .DS_Store
+
+# Python bytecode (it embeds local paths)
+__pycache__/
+*.pyc
