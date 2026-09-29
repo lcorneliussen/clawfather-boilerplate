@@ -185,6 +185,10 @@ jobs:
           HOST: ${{ steps.env.outputs.host }}
         run: |
           set -euo pipefail
+          # A timed-out workflow leaves its host unit running to finish safely.
+          # Never replace files underneath that unit on a later queued run.
+          running="$(ssh "$HOST" "systemctl list-units --plain --no-legend --state=activating,running 'claw-deploy-*'")"
+          [[ -z "$running" ]] || { echo 'another rollout is still running on the host' >&2; exit 1; }
           dest="/opt/$CLAW_INSTANCE"
           rollback="$dest/.rollback/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           ssh "$HOST" "set -e; umask 077; mkdir -p '$rollback'; \
