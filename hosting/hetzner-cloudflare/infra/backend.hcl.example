@@ -1,0 +1,22 @@
+# S3-compatible backend settings. Copy to instance/infra/backend.hcl and commit
+# it — it holds no credentials (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY come
+# from the environment). Shown for Cloudflare R2; any S3-compatible store works.
+bucket = "REPLACE_ME-tofu-state"
+key    = "production/opentofu.tfstate"
+region = "auto"
+
+endpoints = {
+  s3 = "https://REPLACE_ME_ACCOUNT_ID.r2.cloudflarestorage.com"
+}
+
+# Native S3 locking (no DynamoDB); R2 supports conditional writes.
+use_lockfile = true
+encrypt      = true
+
+# R2 is not AWS: skip the AWS-only checks.
+use_path_style              = true
+skip_credentials_validation = true
+skip_metadata_api_check     = true
+skip_region_validation      = true
+skip_requesting_account_id  = true
+skip_s3_checksum            = true

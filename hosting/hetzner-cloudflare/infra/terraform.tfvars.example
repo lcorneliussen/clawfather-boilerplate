@@ -1,0 +1,30 @@
+# Instance inputs for this profile's OpenTofu. Copy to instance/infra/terraform.tfvars
+# and commit it — nothing here is secret. The infrastructure workflow passes it
+# with -var-file.
+#
+# Not here, because instance/claw.env already holds them and the workflow maps
+# them (one source, so Access and the gateway cannot drift):
+#   instance            <- CLAW_INSTANCE
+#   claw_hostname       <- CLAW_HOSTNAME
+#   claw_access_emails  <- CLAW_ACCESS_EMAILS
+# Credentials (HCLOUD_TOKEN, CLOUDFLARE_API_TOKEN, state keys, OAuth secret)
+# come from the environment.
+
+zone_name = "example.com"
+# ssh_hostname = "ssh.example.com"   # default: ssh.<zone_name>
+
+cloudflare_account_id = "REPLACE_ME"
+cloudflare_zone_id    = "REPLACE_ME"
+
+ssh_public_key   = "ssh-ed25519 REPLACE_ME operator"
+ssh_source_cidrs = ["203.0.113.10/32"]
+
+# server_type     = "cx33"
+# server_location = "fsn1"
+# volume_size_gb  = 50
+
+# Identity providers for Access: reuse IdPs that already exist in the account
+# by id, and/or set GITHUB_OAUTH_CLIENT_ID / _SECRET (as TF_VAR_github_oauth_*)
+# to have a GitHub IdP created. Neither: every login method of the account is
+# offered.
+# access_idp_ids = ["00000000-0000-0000-0000-000000000000"]

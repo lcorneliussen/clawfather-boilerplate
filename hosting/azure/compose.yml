@@ -1,0 +1,111 @@
+# Profile: azure — the front door. Upstream-owned.
+#
+# Merged after core/compose.yml (see there). Relative paths resolve from the
+# project directory, which `bin/claw` sets to the repository root.
+#
+#   internet :443 ─▶ caddy (172.30.0.10) ─ forward auth ─▶ oauth2-proxy :4180
+#                          └─ identity headers ─▶ claw :18789
+#
+# Variables (instance/claw.env unless noted):
+#   CLAW_HOSTNAME         public hostname, e.g. claw.example.com
+#   CLAW_ACME_EMAIL       Let's Encrypt contact
+#   CLAW_OAUTH_PROVIDER   oauth2-proxy provider (default google)
+#   CLAW_ACCESS_DOMAINS   comma-separated e-mail domains; empty = allowlist only
+#   CLAW_ACCESS_EMAILS    JSON array; the deploy writes it one-per-line to
+#                         ${CLAW_DATA}/oauth2-proxy/emails.txt before `bin/claw deploy`
+#   OAUTH2_PROXY_CLIENT_ID / _CLIENT_SECRET / _COOKIE_SECRET   .secrets/claw.env
+#   CLAW_AZURE_CLIENT_ID / CLAW_RUNTIME_KEYVAULT               .secrets/claw.env
+#
+# To change the front door (an extra route, a webhook), mount your own
+# directory over /etc/caddy from instance/compose.yml — same target, so Compose
+# replaces this mount instead of adding one:
+#
+#   services:
+#     caddy:
+#       volumes:
+#         - ./instance/caddy:/etc/caddy:ro
+services:
+  claw:
+    environment:
+      # The VM's user-assigned runtime identity and the runtime Key Vault it
+      # may read. Used only if the instance image carries the Azure CLI:
+      #   az login --identity --client-id "$AZURE_CLIENT_ID"
+      AZURE_CLIENT_ID: ${CLAW_AZURE_CLIENT_ID:-}
+      AZURE_KEYVAULT_NAME: ${CLAW_RUNTIME_KEYVAULT:-}
+
+  # TLS (Let's Encrypt) and the auth gate. Pinned so the gateway and
+  # oauth2-proxy can trust exactly this address as their proxy.
+  caddy:
+    image: docker.io/library/caddy:2.11.4
+    container_name: ${CLAW_INSTANCE}-caddy
+    restart: unless-stopped
+    environment:
+      ACME_EMAIL: ${CLAW_ACME_EMAIL:?set CLAW_ACME_EMAIL in instance/claw.env}
+      CLAW_HOSTNAME: ${CLAW_HOSTNAME:?set CLAW_HOSTNAME in instance/claw.env}
+    volumes:
+      # A directory, not the file: an rsync replaces the file's inode, which a
+      # single-file bind mount would never see. The deploy reloads Caddy.
+      - ./hosting/azure/caddy:/etc/caddy:ro
+      - ${CLAW_DATA}/caddy/data:/data
+      - ${CLAW_DATA}/caddy/config:/config
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    networks:
+      claw:
+        ipv4_address: ${CLAW_TRUSTED_PROXY:?set by hosting/azure/profile.env}
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+  # Sign-in and authorization (domain OR allowlist). Auth-request mode: Caddy
+  # asks /oauth2/auth; the upstream is a static 202 and never reached.
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.4
+    container_name: ${CLAW_INSTANCE}-oauth2-proxy
+    restart: unless-stopped
+    # Same uid as the data directories `bin/claw init` creates (0750, 1000),
+    # so the allowlist file is readable without widening its permissions.
+    user: "1000:1000"
+    environment:
+      OAUTH2_PROXY_PROVIDER: ${CLAW_OAUTH_PROVIDER:-google}
+      OAUTH2_PROXY_CLIENT_ID: ${OAUTH2_PROXY_CLIENT_ID:?set in .secrets/claw.env}
+      OAUTH2_PROXY_CLIENT_SECRET: ${OAUTH2_PROXY_CLIENT_SECRET:?set in .secrets/claw.env}
+      OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_PROXY_COOKIE_SECRET:?set in .secrets/claw.env}
+      OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
+      OAUTH2_PROXY_REVERSE_PROXY: "true"
+      # Only Caddy may set X-Forwarded-*; anything else on the network is not
+      # a proxy. This is *not* --trusted-ip, which would bypass authentication.
+      OAUTH2_PROXY_TRUSTED_PROXY_IPS: ${CLAW_TRUSTED_PROXY}/32
+      OAUTH2_PROXY_UPSTREAMS: static://202
+      OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
+      # Empty admits no domain (an e-mail never ends in a bare "@"); the
+      # allowlist file then decides alone. "*" would admit every account.
+      OAUTH2_PROXY_EMAIL_DOMAINS: ${CLAW_ACCESS_DOMAINS:-}
+      # oauth2-proxy watches this file; allowlist changes apply without a restart.
+      OAUTH2_PROXY_AUTHENTICATED_EMAILS_FILE: /etc/oauth2-proxy/emails.txt
+      OAUTH2_PROXY_REDIRECT_URL: https://${CLAW_HOSTNAME}/oauth2/callback
+      OAUTH2_PROXY_COOKIE_NAME: ${CLAW_INSTANCE}_session
+      OAUTH2_PROXY_COOKIE_SECURE: "true"
+      OAUTH2_PROXY_COOKIE_SAMESITE: lax
+      OAUTH2_PROXY_COOKIE_EXPIRE: 8h
+      OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
+      OAUTH2_PROXY_SILENCE_PING_LOGGING: "true"
+    volumes:
+      - ${CLAW_DATA}/oauth2-proxy:/etc/oauth2-proxy:ro
+    networks:
+      - claw
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"

@@ -1,0 +1,8 @@
+# Profile: local. Upstream-owned. No front door: open
+# http://127.0.0.1:${CLAW_PORT} and paste the token from .secrets/claw.env.
+services:
+  claw:
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
+    # Workstations stop containers when they sleep; restart when Docker does.
+    restart: unless-stopped

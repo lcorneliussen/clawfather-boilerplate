@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Static checks for the azure profile. Upstream-owned; run by tools/check.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+# One pinned compiler everywhere: the same Azure CLI and Bicep versions as
+# workflows/infrastructure.yml. Bump all three together.
+BICEP_VERSION=v0.47.16
+docker run --rm -v "$PWD/infra:/w" -w /w mcr.microsoft.com/azure-cli:2.87.0 sh -c "
+  az bicep install --version $BICEP_VERSION >/dev/null 2>&1 &&
+  az bicep build --file main.bicep --stdout >/dev/null &&
+  az bicep lint --file main.bicep"
+echo "ok: bicep"
+
+docker run --rm -v "$PWD/caddy:/etc/caddy:ro" \
+  -e ACME_EMAIL=ops@example.com -e CLAW_HOSTNAME=claw.example.com \
+  caddy:2.11.4 caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1 ||
+  { echo "Caddyfile invalid" >&2; exit 1; }
+echo "ok: Caddyfile"
+
+docker run --rm -v "$PWD/infra:/w:ro" python:3.13-slim sh -c \
+  'pip install --quiet --disable-pip-version-check pyyaml >/dev/null 2>&1 &&
+   python -c "import yaml,sys; yaml.safe_load(open(\"/w/cloud-init.yaml\"))"'
+echo "ok: cloud-init parses"

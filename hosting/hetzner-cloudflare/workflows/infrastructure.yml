@@ -1,0 +1,163 @@
+# Infrastructure: OpenTofu plan / apply for the hetzner-cloudflare profile.
+#
+# TEMPLATE. Copy to .github/workflows/infrastructure.yml in the derived repo.
+# Upstream-owned; changes arrive with boilerplate upgrades.
+#
+# Inputs, in one place each:
+#   instance/claw.env                 instance, claw hostname, access e-mails —
+#                                 the same values the gateway uses
+#   instance/infra/terraform.tfvars   the rest of the non-secret inputs
+#   instance/infra/backend.hcl        the state bucket (no credentials)
+#   environment secrets           scoped to the OpenTofu steps below
+name: Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: OpenTofu operation
+        required: true
+        default: plan
+        type: choice
+        options:
+          - plan
+          - apply
+
+permissions:
+  contents: read
+
+# Never two state writers at once, and never cancel one halfway.
+concurrency:
+  group: infrastructure
+  cancel-in-progress: false
+
+jobs:
+  opentofu:
+    runs-on: ubuntu-latest
+    # Plan needs the same credentials as apply. Put required reviewers on the
+    # environment to gate both, or give plan its own read-only environment.
+    environment: production
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hosting/hetzner-cloudflare/infra
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # Alternative: keep the credentials in 1Password and load them with a
+      # service account instead of environment secrets. Remove the matching
+      # lines from `env` above when you do.
+      #
+      # - name: Load credentials from 1Password
+      #   uses: 1password/load-secrets-action@v5
+      #   with:
+      #     export-env: true
+      #   env:
+      #     OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+      #     HCLOUD_TOKEN: op://<vault>/<hetzner-item>/credential
+      #     CLOUDFLARE_API_TOKEN: op://<vault>/<cloudflare-item>/credential
+      #     AWS_ACCESS_KEY_ID: op://<vault>/<state-bucket-item>/access key id
+      #     AWS_SECRET_ACCESS_KEY: op://<vault>/<state-bucket-item>/secret access key
+
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: 1.12.6
+
+      - name: Map instance/claw.env to OpenTofu inputs
+        working-directory: .
+        run: |
+          set -euo pipefail
+          # instance/claw.env is shell syntax (bin/claw sources it the same way).
+          set -a
+          # shellcheck disable=SC1091
+          . instance/claw.env
+          set +a
+          [[ "${CLAW_PROFILE:-}" == hetzner-cloudflare ]] || {
+            echo "instance/claw.env: CLAW_PROFILE is '${CLAW_PROFILE:-}', expected hetzner-cloudflare" >&2
+            exit 1
+          }
+          [[ -n "${CLAW_HOSTNAME:-}" ]] || { echo "instance/claw.env: set CLAW_HOSTNAME" >&2; exit 1; }
+          # A JSON array of strings is valid HCL for set(string).
+          jq -e 'type == "array" and length > 0 and all(.[]; type == "string")' \
+            <<<"${CLAW_ACCESS_EMAILS:-}" >/dev/null || {
+            echo "instance/claw.env: CLAW_ACCESS_EMAILS must be a non-empty JSON array" >&2
+            exit 1
+          }
+          for f in instance/infra/backend.hcl instance/infra/terraform.tfvars; do
+            [[ -f "$f" ]] || { echo "missing $f (see hosting/hetzner-cloudflare/infra/*.example)" >&2; exit 1; }
+          done
+          {
+            echo "TF_VAR_instance=$CLAW_INSTANCE"
+            echo "TF_VAR_claw_hostname=$CLAW_HOSTNAME"
+            echo "TF_VAR_claw_access_emails=$(jq -c . <<<"$CLAW_ACCESS_EMAILS")"
+          } >> "$GITHUB_ENV"
+
+      - name: Check credentials
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.TOFU_STATE_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TOFU_STATE_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          for v in HCLOUD_TOKEN CLOUDFLARE_API_TOKEN AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
+            [[ -n "${!v:-}" ]] || { echo "missing secret for $v" >&2; exit 1; }
+          done
+
+      - name: Initialize remote state
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.TOFU_STATE_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TOFU_STATE_SECRET_ACCESS_KEY }}
+        run: tofu init -backend-config="$GITHUB_WORKSPACE/instance/infra/backend.hcl"
+
+      - name: Check formatting and validate
+        run: |
+          tofu fmt -check
+          tofu validate
+
+      - name: Plan
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.TOFU_STATE_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TOFU_STATE_SECRET_ACCESS_KEY }}
+          TF_VAR_github_oauth_client_id: ${{ secrets.GITHUB_OAUTH_CLIENT_ID }}
+          TF_VAR_github_oauth_client_secret: ${{ secrets.GITHUB_OAUTH_CLIENT_SECRET }}
+        run: tofu plan -var-file="$GITHUB_WORKSPACE/instance/infra/terraform.tfvars" -out=infrastructure.tfplan
+
+      # Applies exactly the plan printed above, never a fresh one.
+      - name: Apply the plan
+        if: inputs.operation == 'apply'
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.TOFU_STATE_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TOFU_STATE_SECRET_ACCESS_KEY }}
+          TF_VAR_github_oauth_client_id: ${{ secrets.GITHUB_OAUTH_CLIENT_ID }}
+          TF_VAR_github_oauth_client_secret: ${{ secrets.GITHUB_OAUTH_CLIENT_SECRET }}
+        run: tofu apply infrastructure.tfplan
+
+      - name: Next steps
+        if: inputs.operation == 'apply'
+        run: |
+          set -euo pipefail
+          tofu output
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          ### Applied
+
+          Sensitive outputs are not printed. On first apply, and after any
+          rotation, copy them into the deploy environment's secrets from a
+          workstation with state access:
+
+          | output | deploy secret |
+          | --- | --- |
+          | `cloudflare_tunnel_token` | `CLOUDFLARE_TUNNEL_TOKEN` |
+          | `ci_access_client_id` | `CF_ACCESS_CLIENT_ID` |
+          | `ci_access_client_secret` | `CF_ACCESS_CLIENT_SECRET` |
+
+          e.g. `tofu output -raw cloudflare_tunnel_token | gh secret set CLOUDFLARE_TUNNEL_TOKEN --env production`
+          EOF

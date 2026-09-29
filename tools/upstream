@@ -1,0 +1,382 @@
+#!/usr/bin/env bash
+# upstream — keep a derived claw and the boilerplate in step, by hand but not blind.
+#
+# Upstream-owned. A derived repository is a copy of the boilerplate. Nothing
+# syncs automatically; this tool makes the two manual flows cheap and visible:
+#
+#   upgrade   boilerplate → derived   status, diff, apply
+#   backport  derived → boilerplate   divergence, backport
+#
+# It works on the upstream-owned paths only (.clawfather/ownership). Instance-owned
+# paths are never touched by an upgrade and never offered for a backport.
+#
+# State: .clawfather/upstream.env in the derived repository —
+#   UPSTREAM_URL   where the boilerplate lives
+#   UPSTREAM_REF   the boilerplate commit this repository last took
+#   UPSTREAM_SKIP  upstream-owned paths this repository dropped on purpose
+#                  (unused hosting profiles), space-separated
+set -euo pipefail
+
+root="$(git rev-parse --show-toplevel)"
+cd "$root"
+state=.clawfather/upstream.env
+ownership=.clawfather/ownership
+upstream_ref=refs/clawfather/upstream
+
+usage() {
+  cat <<'EOF'
+Usage: tools/upstream <command>
+
+Upgrade (boilerplate → this repository)
+  init [--ref REF] [--skip PATH]...
+                      record the boilerplate commit this copy was made from,
+                      and the upstream paths it dropped
+  status [REF]        what changed upstream since UPSTREAM_REF, and where you diverged
+  diff [REF]          the upstream change UPSTREAM_REF..REF on owned paths
+  apply [REF]         3-way apply that change, then record REF as the new base
+
+Backport (this repository → boilerplate)
+  divergence [--patch]
+                      where upstream-owned paths differ from UPSTREAM_REF
+  backport RANGE [-o NEW_DIR] [--author "Name <email>"]
+                      export commits in RANGE, limited to upstream-owned paths,
+                      as patches for the boilerplate, authored as you (default:
+                      git config user.name/email) — after a leak check
+
+REF defaults to the boilerplate's main. Apply leaves the result staged and
+uncommitted; conflicts are marked in the files like a merge.
+EOF
+}
+
+die() { echo "upstream: $*" >&2; exit 1; }
+say() { echo "upstream: $*" >&2; }
+
+load_state() {
+  [[ -f "$state" ]] || die "$state missing — run: tools/upstream init"
+  # shellcheck disable=SC1090
+  . "$state"
+  : "${UPSTREAM_URL:?}" "${UPSTREAM_REF:?}"
+}
+
+# Upstream-owned pathspecs, minus the ones this repository skipped. With a
+# REF, the ownership map at that boilerplate commit counts too: an upgrade
+# that makes a new path upstream-owned must bring that path along.
+owned_paths() {
+  local ref="${1:-}" line skip
+  [[ -f "$ownership" ]] || die "$ownership missing"
+  {
+    cat "$ownership"
+    [[ -z "$ref" ]] || git show "$ref:$ownership" 2>/dev/null || true
+  } | while IFS= read -r line; do
+    line="${line%%#*}"; line="${line//[[:space:]]/}"
+    if [[ "$line" == upstream:* ]]; then printf '%s\n' "${line#upstream:}"; fi
+  done | awk '!seen[$0]++'
+  for skip in ${UPSTREAM_SKIP:-}; do
+    printf ':(exclude)%s\n' "$skip"
+  done
+}
+
+# fetch REF — fetch a boilerplate branch, tag or commit; print its commit.
+# Fill the array `paths` (bash 3 has no mapfile; macOS still ships it).
+read_paths() { # [REF]
+  paths=()
+  local p
+  while IFS= read -r p; do paths+=("$p"); done < <(owned_paths "${1:-}")
+}
+
+fetch() {
+  local ref="${1:-main}"
+  git fetch --quiet --no-tags "$UPSTREAM_URL" "$ref" || die "cannot fetch $ref from $UPSTREAM_URL"
+  git update-ref "$upstream_ref" FETCH_HEAD
+  git rev-parse FETCH_HEAD
+}
+
+# require_descendant TARGET — refuse a target that is not ahead of the base.
+# Applying base..target for an older or unrelated target would silently
+# revert upstream work (e.g. while the base is on a branch not yet merged).
+require_descendant() {
+  local target="$1"
+  git merge-base --is-ancestor "$UPSTREAM_REF" "$target" && return 0
+  die "$(git rev-parse --short "$target") is not a descendant of the base $(git rev-parse --short "$UPSTREAM_REF") — pass the ref your base lives on (tools/upstream $cmd <branch|tag|sha>)"
+}
+
+write_state() {
+  local ref="$1"
+  install -d .clawfather
+  {
+    echo "# Written by tools/upstream. The boilerplate commit this repository last took."
+    echo "UPSTREAM_URL=$UPSTREAM_URL"
+    echo "UPSTREAM_REF=$ref"
+    echo "UPSTREAM_SKIP=\"${UPSTREAM_SKIP:-}\""
+  } > "$state"
+}
+
+cmd_init() {
+  local ref="" skips=""
+  while (($#)); do
+    case "$1" in
+      --ref) ref="${2:?--ref needs a commit}"; shift 2 ;;
+      --skip) skips="${skips:+$skips }${2:?--skip needs a path}"; shift 2 ;;
+      *) die "init: unknown argument $1" ;;
+    esac
+  done
+  if [[ -f "$state" ]]; then
+    # shellcheck disable=SC1090
+    . "$state"
+  fi
+  # Skips given now add to the recorded ones (sourcing the state above would
+  # otherwise have replaced them).
+  # shellcheck disable=SC2086 # word-split the space-separated lists
+  UPSTREAM_SKIP="$(printf '%s\n' ${UPSTREAM_SKIP:-} $skips | awk 'NF && !seen[$0]++' | tr '\n' ' ')"
+  UPSTREAM_SKIP="${UPSTREAM_SKIP% }"
+  UPSTREAM_URL="${UPSTREAM_URL:-https://github.com/lcorneliussen/clawfather-boilerplate.git}"
+  local target
+  target="$(fetch "${ref:-main}")"
+  write_state "$target"
+  say "base recorded: $(git log -1 --format='%h %s' "$target")"
+  say "skipped: ${UPSTREAM_SKIP:-(nothing)} — commit $state"
+}
+
+cmd_status() {
+  load_state
+  local target paths
+  target="$(fetch "${1:-main}")"
+  require_descendant "$target"
+  read_paths "$target"
+  echo "base:     $(git log -1 --format='%h %ad %s' --date=short "$UPSTREAM_REF")"
+  echo "upstream: $(git log -1 --format='%h %ad %s' --date=short "$target")"
+  echo
+  echo "Upstream commits since base touching owned paths:"
+  git log --no-merges --format='  %h %ad %s' --date=short "$UPSTREAM_REF..$target" -- "${paths[@]}" |
+    sed 's/^$/  (none)/' | grep . || echo "  (none)"
+  echo
+  echo "Owned files you changed since base (divergence — upgrade conflicts come from here):"
+  git diff --stat "$UPSTREAM_REF" HEAD -- "${paths[@]}" | sed 's/^/  /' | grep . || echo "  (none)"
+}
+
+cmd_diff() {
+  load_state
+  local target paths
+  target="$(fetch "${1:-main}")"
+  require_descendant "$target"
+  read_paths "$target"
+  git diff "$UPSTREAM_REF" "$target" -- "${paths[@]}"
+}
+
+cmd_apply() {
+  load_state
+  if ! git diff --quiet || ! git diff --cached --quiet; then
+    die "working tree not clean; commit or set work aside first"
+  fi
+  local target paths patch status=0
+  target="$(fetch "${1:-main}")"
+  require_descendant "$target"
+  # An upgrade is carried out by the target's version of this tool, so a
+  # fix to the upgrade itself applies to the upgrade that brings it.
+  if [[ -z "${CLAW_UPSTREAM_TARGET_TOOL:-}" ]] &&
+     ! git show "$target:tools/upstream" | cmp -s - "$0"; then
+    local tool
+    tool="$(mktemp)"
+    git show "$target:tools/upstream" > "$tool"
+    say "using tools/upstream from $(git rev-parse --short "$target")"
+    CLAW_UPSTREAM_TARGET_TOOL=1 exec bash "$tool" apply "$target"
+  fi
+  [[ "$target" != "$(git rev-parse "$UPSTREAM_REF")" ]] || { say "already at $(git rev-parse --short "$target")"; return; }
+  read_paths "$target"
+  patch="$(mktemp)"
+  # Expanded now: `patch` is local and gone by the time EXIT fires.
+  # shellcheck disable=SC2064
+  trap "rm -f '$patch' '$patch.log'" EXIT
+  git diff --binary "$UPSTREAM_REF" "$target" -- "${paths[@]}" > "$patch"
+  if [[ -s "$patch" ]]; then
+    git apply --3way --index "$patch" || status=$?
+  fi
+  # Conflicts leave unmerged entries to resolve; any other failure applied
+  # nothing (git apply is atomic) and must not move the base.
+  if ((status)) && [[ -z "$(git ls-files --unmerged)" ]]; then
+    die "the upstream change did not apply and nothing was changed — see the errors above"
+  fi
+  write_state "$target"
+  git add "$state"
+  echo
+  git log --no-merges --format='  %h %s' "$UPSTREAM_REF..$target" -- "${paths[@]}" > "$patch.log" || true
+  if ((status)); then
+    say "applied with conflicts — resolve the marked files, then commit"
+  else
+    say "applied cleanly — review, test (bin/claw deploy locally), then commit"
+  fi
+  echo "Suggested commit message:"
+  echo
+  echo "  upstream: clawfather-boilerplate $(git rev-parse --short "$target")"
+  echo
+  sed 's/^/  /' "$patch.log"
+  return "$status"
+}
+
+cmd_divergence() {
+  load_state
+  read_paths
+  # By content, not history: upgrades are applied as patches, so commit
+  # ancestry says nothing about what still differs from the base.
+  if git diff --quiet "$UPSTREAM_REF" HEAD -- "${paths[@]}"; then
+    echo "(none) — upstream-owned paths match the base $(git rev-parse --short "$UPSTREAM_REF")"
+    return
+  fi
+  if [[ "${1:-}" == --patch ]]; then
+    git diff "$UPSTREAM_REF" HEAD -- "${paths[@]}"
+    return
+  fi
+  git diff --stat "$UPSTREAM_REF" HEAD -- "${paths[@]}"
+  echo
+  echo "Last commits touching those files (tools/upstream divergence --patch for the diff):"
+  local changed=() f
+  while IFS= read -r f; do changed+=("$f"); done < <(git diff --name-only "$UPSTREAM_REF" HEAD -- "${paths[@]}")
+  git log --no-merges -5 --format='  %h %s' HEAD -- "${changed[@]}"
+}
+
+# Terms that must never reach the public boilerplate: the instance's own
+# identifiers from instance/claw.env and whatever the instance lists in
+# .clawfather/private-terms (one extended regex per line). E-mail addresses
+# are checked separately (leaked_emails).
+leak_patterns() {
+  # Resolved as bin/claw resolves them (instance/claw.env may compute a value),
+  # then matched literally. Failing to resolve them fails the check.
+  local env
+  env="$(bin/claw env)" || return 1
+  sed -nE 's/^(CLAW_INSTANCE|CLAW_HOSTNAME|CLAW_IMAGE_NAME)=(.+)$/\2/p' <<<"$env" |
+    sed 's/[][\.*^$+?(){}|/]/\\&/g'
+  if [[ -f .clawfather/private-terms ]]; then
+    grep -v '^[[:space:]]*\(#\|$\)' .clawfather/private-terms || true
+  fi
+}
+
+# Every e-mail address in FILE that is not explicitly public: the publishing
+# author (set by backport), attribution no-reply addresses of GitHub and
+# Anthropic, example domains, and whatever .clawfather/public-emails lists
+# (one address or @domain per line).
+leaked_emails() {
+  local file="$1" author_email="$2" allowed
+  allowed="$(printf '%s\n' "$author_email" noreply@anthropic.com @users.noreply.github.com \
+      @example.com @example.org @example.net)"
+  if [[ -f .clawfather/public-emails ]]; then
+    allowed+=$'\n'"$(grep -v '^[[:space:]]*\(#\|$\)' .clawfather/public-emails || true)"
+  fi
+  { grep -Eo '("([^"\\]|\\.)*"|[A-Za-z0-9._%+-]+)@([A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*|\[[^]]+\])' "$file" || true; } | sort -u |
+    while IFS= read -r email; do
+      local lower entry ok=false
+      lower="$(tr '[:upper:]' '[:lower:]' <<<"$email")"
+      while IFS= read -r entry; do
+        entry="$(tr '[:upper:]' '[:lower:]' <<<"$entry")"
+        [[ -n "$entry" ]] || continue
+        if [[ "$entry" == @* && "$lower" == *"$entry" ]] || [[ "$lower" == "$entry" ]]; then
+          ok=true; break
+        fi
+      done <<<"$allowed"
+      $ok || printf '%s\n' "$email"
+    done
+}
+
+cmd_backport() {
+  load_state
+  local range="" out="" author="" paths
+  while (($#)); do
+    case "$1" in
+      -o) out="${2:?-o needs a directory}"; shift 2 ;;
+      --author) author="${2:?--author needs \"Name <email>\"}"; shift 2 ;;
+      -*) die "backport: unknown option $1" ;;
+      *) range="$1"; shift ;;
+    esac
+  done
+  [[ -n "$range" ]] || die "backport needs a commit range, e.g. HEAD~2..HEAD or <sha>^!"
+
+  # The public history gets the publisher's identity, never the original
+  # authors': a derived claw's contributors are private. Default: this
+  # repository's configured identity.
+  author="${author:-$(git config user.name) <$(git config user.email)>}"
+  [[ "$author" =~ ^[^\<\>]+\ \<[^\<\>@]+@[^\<\>]+\>$ ]] || die "author must look like \"Name <email>\": $author"
+  local author_email="${author##*<}"; author_email="${author_email%>}"
+
+  # A fresh directory only: stale patches would be checked and applied as if
+  # they belonged to this range.
+  if [[ -n "$out" ]]; then
+    [[ ! -e "$out" ]] || [[ -z "$(ls -A "$out")" ]] || die "$out is not empty; give a new directory"
+  else
+    out="$(mktemp -d)"
+  fi
+  read_paths
+  install -d "$out"
+  git format-patch --quiet --no-stat --output-directory "$out" "$range" -- "${paths[@]}" >/dev/null
+  local patches=("$out"/*.patch)
+  [[ -e "${patches[0]}" ]] || die "no commits in $range touch upstream-owned paths"
+
+  local file
+  for file in "${patches[@]}"; do
+    # First From: header only; `git am` takes the author from it.
+    awk -v a="From: $author" '
+      !done && /^From: / { print a; done = 1; replacing = 1; next }
+      replacing && /^[ \t]/ { next }
+      { replacing = 0; print }
+    ' \
+      "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+  done
+
+  # Scan decoded source messages and path names as well: format-patch may MIME
+  # encode non-ASCII subjects and quote non-ASCII paths, hiding a restricted
+  # term from a grep of the patch bytes alone.
+  local source_scan
+  source_scan="$(mktemp)"
+  # shellcheck disable=SC2064
+  trap "rm -f '$source_scan'" EXIT
+  git -c core.quotePath=false log --encoding=UTF-8 --format='%B' --name-only \
+    "$range" -- "${paths[@]}" > "$source_scan" || die "leak check: cannot read source metadata"
+
+  # The whole patch leaves — headers, message, diff — so the whole patch is
+  # checked too. A pattern grep cannot parse stops the export: a check that
+  # cannot run must not pass.
+  # Each helper's output is collected first: a helper that fails must stop
+  # the export, not look like "nothing found" to a loop reading its output.
+  local hits=0 pattern status patterns
+  patterns="$(leak_patterns)" || die "leak check: cannot resolve this instance's identifiers (bin/claw env failed)"
+  while IFS= read -r pattern; do
+    [[ -n "$pattern" ]] || continue
+    status=0; grep -Eq -- "$pattern" /dev/null 2>/dev/null || status=$?
+    ((status != 2)) || die "leak check: invalid pattern /$pattern/ — fix it in .clawfather/private-terms"
+    for file in "${patches[@]}" "$source_scan"; do
+      if grep -Eiq -- "$pattern" "$file"; then
+        say "leak check: /$pattern/ matches in ${file##*/}"
+        hits=$((hits + 1))
+      fi
+    done
+  done <<<"$patterns"
+  for file in "${patches[@]}" "$source_scan"; do
+    local email emails
+    emails="$(leaked_emails "$file" "$author_email")" || die "leak check: e-mail scan failed on ${file##*/}"
+    while IFS= read -r email; do
+      [[ -n "$email" ]] || continue
+      say "leak check: e-mail $email in ${file##*/}"
+      hits=$((hits + 1))
+    done <<<"$emails"
+  done
+  ((hits == 0)) || die "$hits leak-check hit(s) — generalize the change, then export again (patches left in $out)"
+
+  rm -f "$source_scan"
+  trap - EXIT
+
+  say "${#patches[@]} patch(es) in $out, limited to upstream-owned paths, authored as $author"
+  say "in a boilerplate checkout: git switch -c <slug> && git am -3 $out/*.patch"
+  say "then open a PR there; name no private deployment in it"
+}
+
+cmd="${1:-}"
+[[ -n "$cmd" ]] || { usage; exit 1; }
+shift
+case "$cmd" in
+  init) cmd_init "$@" ;;
+  status) cmd_status "$@" ;;
+  diff) cmd_diff "$@" ;;
+  apply) cmd_apply "$@" ;;
+  divergence) cmd_divergence "$@" ;;
+  backport) cmd_backport "$@" ;;
+  -h|--help|help) usage ;;
+  *) usage; exit 1 ;;
+esac

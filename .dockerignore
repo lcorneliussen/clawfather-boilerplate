@@ -1,0 +1,10 @@
+# The image build context is the repository root (instance/image/Dockerfile).
+# Keep runtime state and secrets out of it, so no COPY can ever bake them in.
+.data/
+.secrets/
+.git/
+**/.terraform/
+**/*.tfstate*
+**/*.tfplan
+**/*.tfvars
+**/backend.hcl

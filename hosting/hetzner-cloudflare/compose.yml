@@ -1,0 +1,44 @@
+# Profile: hetzner-cloudflare. Upstream-owned.
+#
+# The front door is a Cloudflare Tunnel connector. It dials out to Cloudflare,
+# so the host publishes no HTTP port at all; Cloudflare Access authenticates
+# every request before it enters the tunnel. The tunnel's routes are managed
+# remotely (infra/cloudflare.tf):
+#
+#   <claw hostname>  ->  http://claw:18789                 the gateway, by service name
+#   <ssh hostname>   ->  ssh://host.docker.internal:22     the host's sshd (CI and operators)
+#
+# The connector has a pinned address on the claw network, and profile.env
+# tells the gateway to trust identity headers from that address only.
+services:
+  cloudflared:
+    # Pin the version; bump by PR together with the CI client in the workflows.
+    image: cloudflare/cloudflared:2026.9.1
+    container_name: ${CLAW_INSTANCE}-cloudflared
+    command: ["tunnel", "--no-autoupdate", "run"]
+    restart: unless-stopped
+    environment:
+      # Connector token from `tofu output -raw cloudflare_tunnel_token`,
+      # delivered into .secrets/claw.env by the deploy workflow.
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in .secrets/claw.env}
+    networks:
+      claw:
+        # Must equal CLAW_TRUSTED_PROXY, which is what the gateway trusts.
+        ipv4_address: ${CLAW_TRUSTED_PROXY:-172.30.0.10}
+    # SSH through Access lands on the host's sshd via the bridge gateway.
+    # sshd listens on all addresses by default, so it is reachable there; the
+    # Hetzner firewall keeps port 22 closed to the public internet.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # The connector only dials out and proxies; it needs no privileges and
+    # writes nothing to disk.
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"

@@ -1,0 +1,58 @@
+---
+# The persistent volume becomes the data root. bin/claw creates the
+# directories inside it (`bin/claw init`, run by every deploy), so the list
+# of data directories lives in one place.
+- name: Mount the persistent data volume
+  ansible.posix.mount:
+    path: "{{ claw_data_root }}"
+    src: "{{ claw_volume_device }}"
+    fstype: ext4
+    # nofail: a detached volume must not keep the host from booting into a
+    # state where it can be repaired.
+    opts: defaults,nofail
+    state: mounted
+
+# ... but with nofail, Docker could start the stack (restart: unless-stopped)
+# against the empty mount point and grow a second state tree on the OS disk.
+# Docker waits for the volume instead; a host without it stays repairable.
+- name: Create the Docker unit drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/docker.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Make Docker require the data volume
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/docker.service.d/10-claw-data.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      RequiresMountsFor={{ claw_data_root }}
+  register: claw_docker_dropin
+
+- name: Reload systemd after the Docker drop-in changed
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: claw_docker_dropin.changed
+
+- name: Restrict the data root
+  ansible.builtin.file:
+    path: "{{ claw_data_root }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# The deploy workflow rsyncs the repository here and writes .secrets/ inside
+# it; the deploy user owns the tree, nobody else can read it.
+- name: Create the repository checkout directory
+  ansible.builtin.file:
+    path: "{{ claw_repo_dir }}"
+    state: directory
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_user }}"
+    mode: "0750"
