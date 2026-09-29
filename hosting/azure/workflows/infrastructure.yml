@@ -1,0 +1,70 @@
+# Template — copy to .github/workflows/infrastructure.yml in a derived
+# repository; it is site-owned from then on. Upstream-owned here.
+#
+# Bicep what-if / apply for the instance's resource group. The first
+# foundation pass (role assignments) is operator work — see
+# hosting/azure/README.md → Bring-up order. This workflow runs as the deploy
+# identity (Contributor on the group, cannot assign roles) and therefore
+# passes --pipeline. The instance name comes from site/claw.env.
+name: Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Bicep operation
+        required: true
+        default: what-if
+        type: choice
+        options:
+          - what-if
+          - apply
+      pass:
+        description: Which pass
+        required: true
+        default: vm
+        type: choice
+        options:
+          - foundation
+          - vm
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: production-infrastructure
+  cancel-in-progress: false
+
+jobs:
+  bicep:
+    runs-on: ubuntu-24.04
+    # The federated credential's subject is bound to this environment; every run needs it.
+    environment: production
+    timeout-minutes: 30
+    env:
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      SSH_PUBLIC_KEYS: ${{ vars.SSH_PUBLIC_KEYS }}
+      SSH_SOURCE_CIDRS: ${{ vars.SSH_SOURCE_CIDRS }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - run: az bicep install
+
+      # Note: an apply rewrites the NSG rule set, removing a deploy run's
+      # temporary SSH rule if one is live at that moment. Rerun that deploy.
+      - name: ${{ inputs.operation }} (${{ inputs.pass }})
+        run: |
+          set -euo pipefail
+          flags=(--pipeline)
+          [[ "${{ inputs.operation }}" == what-if ]] && flags+=(--what-if)
+          hosting/azure/bootstrap.sh "${{ inputs.pass }}" "${flags[@]}"

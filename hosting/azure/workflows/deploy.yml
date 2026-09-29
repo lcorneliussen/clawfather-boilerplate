@@ -1,0 +1,264 @@
+# Template — copy to .github/workflows/deploy.yml in a derived repository; it is
+# site-owned from then on. Upstream-owned here.
+#
+# Builds the claw image on the runner and pushes it to the instance's registry,
+# ships this repository to the host, writes the host's .secrets/claw.env from
+# Key Vault, and runs `bin/claw deploy` there. The ordered rollout (backup,
+# configure, doctor, health, config rollback) lives in bin/claw, not here.
+#
+# Repository variables (hosting/azure/bootstrap.sh github): AZURE_CLIENT_ID,
+# AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID, AZURE_RESOURCE_GROUP,
+# SSH_HOST_PUBLIC_KEY. Everything else comes from site/claw.env or Key Vault.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  freshness:
+    runs-on: ubuntu-24.04
+    outputs:
+      deploy: ${{ steps.current.outputs.deploy }}
+    steps:
+      # Queued pushes deploy in order; one that main has already moved past
+      # would only roll the host back for a few minutes. Skip it.
+      - name: Reject a superseded push
+        id: current
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" != push ]]; then
+            echo 'deploy=true' >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          head="$(gh api "repos/${{ github.repository }}/commits/main" --jq .sha)"
+          if [[ "$head" == "$GITHUB_SHA" ]]; then
+            echo 'deploy=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'deploy=false' >> "$GITHUB_OUTPUT"
+            echo "Skipping superseded commit $GITHUB_SHA; main is $head"
+          fi
+
+  deploy:
+    needs: freshness
+    if: needs.freshness.outputs.deploy == 'true'
+    runs-on: ubuntu-24.04
+    # The federated credential's subject is bound to this environment.
+    environment: production
+    timeout-minutes: 45
+    env:
+      RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      SSH_HOST_PUBLIC_KEY: ${{ vars.SSH_HOST_PUBLIC_KEY }}
+      SSH_USER: ${{ vars.SSH_USER || 'deploy' }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Check site configuration
+        run: |
+          set -euo pipefail
+          for v in RESOURCE_GROUP SSH_HOST_PUBLIC_KEY; do
+            [[ -n "${!v}" ]] || { echo "::error::repository variable ${v/RESOURCE_GROUP/AZURE_RESOURCE_GROUP} is not set (hosting/azure/bootstrap.sh github)"; exit 1; }
+          done
+          set -a; . hosting/azure/profile.env; . site/claw.env; set +a
+          [[ "$CLAW_PROFILE" == azure ]] || { echo "::error::site/claw.env: CLAW_PROFILE=$CLAW_PROFILE, expected azure"; exit 1; }
+          for v in CLAW_INSTANCE CLAW_HOSTNAME CLAW_ACME_EMAIL; do
+            [[ -n "${!v:-}" ]] || { echo "::error::site/claw.env: $v is empty"; exit 1; }
+          done
+          for v in CLAW_ACCESS_EMAILS CLAW_ADMIN_EMAILS; do
+            jq -e 'type == "array" and all(.[]; type == "string" and length > 0)' <<<"${!v:-}" >/dev/null \
+              || { echo "::error::site/claw.env: $v must be a JSON array of e-mails"; exit 1; }
+          done
+          if [[ -z "${CLAW_ACCESS_DOMAINS:-}" && "$(jq length <<<"$CLAW_ACCESS_EMAILS")" -eq 0 ]]; then
+            echo "::error::nobody could sign in: set CLAW_ACCESS_DOMAINS or CLAW_ACCESS_EMAILS in site/claw.env"; exit 1
+          fi
+          echo "sign-in: domains='${CLAW_ACCESS_DOMAINS:-none}' allowlist=$(jq -c . <<<"$CLAW_ACCESS_EMAILS")"
+          { echo "CLAW_INSTANCE=$CLAW_INSTANCE"; echo "CLAW_HOSTNAME=$CLAW_HOSTNAME"; } >> "$GITHUB_ENV"
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve the foundation
+        id: env
+        run: |
+          set -euo pipefail
+          out() { az deployment group show -g "$RESOURCE_GROUP" -n foundation --query "properties.outputs.$1.value" -o tsv; }
+          kv="$(out keyVaultName)"; acr="$(out registryName)"; registry="$(out registryLoginServer)"
+          nsg="$(out networkSecurityGroupName)"; host="$(out publicFqdn)"; ip="$(out publicIp)"
+          runtime_kv="$(out runtimeKeyVaultName)"; claw_client_id="$(out clawIdentityClientId)"
+          for v in kv acr registry nsg host ip runtime_kv claw_client_id; do
+            [[ -n "${!v}" ]] || { echo "::error::foundation output $v is empty"; exit 1; }
+          done
+          {
+            echo "kv=$kv"; echo "acr=$acr"; echo "registry=$registry"; echo "nsg=$nsg"
+            echo "host=$host"; echo "ip=$ip"; echo "runtime_kv=$runtime_kv"; echo "claw_client_id=$claw_client_id"
+            echo "image_name=$registry/$CLAW_INSTANCE-openclaw"
+          } >> "$GITHUB_OUTPUT"
+
+      # Same build as a workstation's: core image, then the site image FROM it.
+      # Tagged with the commit, so the host runs exactly what this run built.
+      - name: Build and push the image
+        env:
+          CLAW_IMAGE_NAME: ${{ steps.env.outputs.image_name }}
+          CLAW_IMAGE_TAG: ${{ github.sha }}
+          CLAW_PLATFORM: linux/amd64
+        run: |
+          set -euo pipefail
+          az acr login --name "${{ steps.env.outputs.acr }}"
+          bin/claw build --push
+
+      - name: Load deploy secrets from Key Vault
+        env:
+          KV: ${{ steps.env.outputs.kv }}
+        run: |
+          set -euo pipefail
+          get() { az keyvault secret show --vault-name "$KV" --name "$1" --query value -o tsv; }
+          install -d -m 700 ~/.ssh
+          az keyvault secret download --vault-name "$KV" --name ssh-deploy-private-key --file ~/.ssh/claw_deploy
+          chmod 600 ~/.ssh/claw_deploy
+          for name in oauth2-proxy-client-id oauth2-proxy-client-secret oauth2-proxy-cookie-secret; do
+            value="$(get "$name")" || { echo "::error::Key Vault secret $name is missing (hosting/azure/bootstrap.sh secrets)"; exit 1; }
+            # oauth2-proxy accepts URL-safe base64 only; the same bytes either way.
+            [[ "$name" != oauth2-proxy-cookie-secret ]] || value="$(tr '+/' '-_' <<<"$value")"
+            echo "::add-mask::$value"
+            echo "$(tr '[:lower:]-' '[:upper:]_' <<<"$name")=$value" >> "$GITHUB_ENV"
+          done
+          # A short-lived ACR token for the host's pull; no registry credential is stored there.
+          token="$(az acr login -n "${{ steps.env.outputs.acr }}" --expose-token --query accessToken -o tsv)"
+          echo "::add-mask::$token"
+          echo "REGISTRY_TOKEN=$token" >> "$GITHUB_ENV"
+
+      # SSH is closed to the internet; open it for this runner's address only.
+      - name: Open SSH for this runner
+        run: |
+          set -euo pipefail
+          ip="$(curl -fsS https://api.ipify.org)"
+          [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          priority=$(( 300 + (${{ github.run_number }} % 90) ))
+          az network nsg rule create -g "$RESOURCE_GROUP" --nsg-name "${{ steps.env.outputs.nsg }}" \
+            -n "ci-ssh-${{ github.run_id }}" --priority "$priority" --direction Inbound --access Allow \
+            --protocol Tcp --source-address-prefixes "$ip/32" --source-port-ranges '*' \
+            --destination-address-prefixes '*' --destination-port-ranges 22 -o none
+
+      - name: Configure SSH
+        env:
+          HOST: ${{ steps.env.outputs.host }}
+          IP: ${{ steps.env.outputs.ip }}
+        run: |
+          set -euo pipefail
+          # The host key comes from a repository variable, never from the first connection.
+          printf '%s,%s %s\n' "$HOST" "$IP" "$SSH_HOST_PUBLIC_KEY" > ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<EOC
+          Host $HOST
+            User $SSH_USER
+            IdentityFile ~/.ssh/claw_deploy
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            HostKeyAlgorithms ssh-ed25519
+            ConnectTimeout 10
+          EOC
+          chmod 600 ~/.ssh/known_hosts ~/.ssh/config
+          # NSG rules take a moment to apply.
+          for attempt in $(seq 1 24); do
+            if ssh "$HOST" true 2>/dev/null; then echo "ssh ok after $attempt attempt(s)"; exit 0; fi
+            sleep 5
+          done
+          echo "::error::could not reach $HOST over SSH (NSG rule propagation or host key mismatch)"
+          exit 1
+
+      - name: Ship the repository and secrets
+        env:
+          HOST: ${{ steps.env.outputs.host }}
+          CLAW_AZURE_CLIENT_ID: ${{ steps.env.outputs.claw_client_id }}
+          CLAW_RUNTIME_KEYVAULT: ${{ steps.env.outputs.runtime_kv }}
+        run: |
+          set -euo pipefail
+          dest="/opt/$CLAW_INSTANCE"
+          # Excluded paths are also protected from --delete: host data and
+          # secrets survive every sync.
+          rsync -az --delete --exclude=/.git --exclude=/.data --exclude=/.secrets ./ "$HOST:$dest/"
+          # This workflow owns the host's .secrets/claw.env. A site that needs
+          # more secrets adds lines here (from Key Vault or GitHub secrets).
+          {
+            printf '%s=%q\n' OAUTH2_PROXY_CLIENT_ID "$OAUTH2_PROXY_CLIENT_ID"
+            printf '%s=%q\n' OAUTH2_PROXY_CLIENT_SECRET "$OAUTH2_PROXY_CLIENT_SECRET"
+            printf '%s=%q\n' OAUTH2_PROXY_COOKIE_SECRET "$OAUTH2_PROXY_COOKIE_SECRET"
+            printf '%s=%q\n' CLAW_AZURE_CLIENT_ID "$CLAW_AZURE_CLIENT_ID"
+            printf '%s=%q\n' CLAW_RUNTIME_KEYVAULT "$CLAW_RUNTIME_KEYVAULT"
+          } | ssh "$HOST" "set -e; umask 077; install -d -m 0700 '$dest/.secrets'; \
+                cat > '$dest/.secrets/claw.env.tmp'; mv -f '$dest/.secrets/claw.env.tmp' '$dest/.secrets/claw.env'"
+
+      - name: Deploy on the host
+        env:
+          HOST: ${{ steps.env.outputs.host }}
+          REGISTRY: ${{ steps.env.outputs.registry }}
+          IMAGE: ${{ steps.env.outputs.image_name }}:${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # ACR accepts its AAD token with this fixed null-GUID user name.
+          printf '%s' "$REGISTRY_TOKEN" | ssh "$HOST" \
+            "docker login '$REGISTRY' --username 00000000-0000-0000-0000-000000000000 --password-stdin"
+          ssh "$HOST" "cd '/opt/$CLAW_INSTANCE' && env CLAW_IMAGE='$IMAGE' CLAW_BUILD=no bash -s" <<'REMOTE'
+          set -euo pipefail
+          # oauth2-proxy's allowlist, from site/claw.env. Owned like the other
+          # data directories (uid 1000, which oauth2-proxy runs as); it
+          # watches the file, so a changed list applies without a restart.
+          data="$(bin/claw env | sed -n 's/^CLAW_DATA=//p')"
+          emails="$(set -a; . hosting/azure/profile.env; . site/claw.env; printf '%s' "$CLAW_ACCESS_EMAILS")"
+          sudo install -d -o 1000 -g 1000 -m 0750 "$data/oauth2-proxy"
+          jq -r '.[] | ascii_downcase' <<<"$emails" \
+            | sudo install -o 1000 -g 1000 -m 0640 /dev/stdin "$data/oauth2-proxy/emails.txt"
+          echo "allowlist entries: $(sudo wc -l "$data/oauth2-proxy/emails.txt" | cut -d' ' -f1)"
+
+          docker pull --quiet "$CLAW_IMAGE"
+          bin/claw deploy
+          # compose up does not notice a changed Caddyfile; a reload is
+          # graceful and a no-op when nothing changed.
+          bin/claw compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+          REMOTE
+
+      - name: Check the public endpoint
+        env:
+          IP: ${{ steps.env.outputs.ip }}
+        run: |
+          set -euo pipefail
+          resolved="$(dig +short "$CLAW_HOSTNAME" | tail -n1 || true)"
+          if [[ "$resolved" != "$IP" ]]; then
+            echo "::notice::$CLAW_HOSTNAME resolves to '${resolved:-nothing}', expected $IP — DNS not (yet) pointing here; skipped the public check."
+            exit 0
+          fi
+          for attempt in $(seq 1 30); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' "https://$CLAW_HOSTNAME/healthz" || true)"
+            [[ "$code" == 200 ]] && { echo "https://$CLAW_HOSTNAME/healthz -> 200"; exit 0; }
+            sleep 5
+          done
+          echo "::error::https://$CLAW_HOSTNAME/healthz did not answer 200 (last: $code). Check Caddy's certificate issuance."
+          exit 1
+
+      - name: Log the host out of the registry
+        if: always() && steps.env.outputs.host != ''
+        run: ssh "${{ steps.env.outputs.host }}" "docker logout '${{ steps.env.outputs.registry }}'" >/dev/null 2>&1 || true
+
+      - name: Close SSH for this runner
+        if: always() && steps.env.outputs.nsg != ''
+        run: |
+          az network nsg rule delete -g "$RESOURCE_GROUP" --nsg-name "${{ steps.env.outputs.nsg }}" \
+            -n "ci-ssh-${{ github.run_id }}" -o none 2>/dev/null || true
+
+      - name: Remove temporary credentials
+        if: always()
+        run: shred -u ~/.ssh/claw_deploy 2>/dev/null || true

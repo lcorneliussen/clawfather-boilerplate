@@ -1,0 +1,96 @@
+# Front door for the azure profile. Upstream-owned.
+#
+# Caddy terminates TLS (Let's Encrypt), asks oauth2-proxy whether the request
+# carries a valid session, and only then forwards to the OpenClaw gateway with
+# the identity headers the gateway trusts. This is Caddy's `forward_auth`
+# written out in full so that an unauthenticated browser is sent to the login
+# flow instead of receiving oauth2-proxy's bare 401.
+#
+# Upstreams are Compose service names on the claw network.
+# Environment (hosting/azure/compose.yml): ACME_EMAIL, CLAW_HOSTNAME.
+#
+# Site-specific routes (a signed webhook, a preview host) do not belong here:
+# copy this directory to site/caddy/, add a `handle` block, and mount it over
+# /etc/caddy from site/compose.yml (see the header of hosting/azure/compose.yml).
+
+{
+	email {$ACME_EMAIL}
+	# The admin API listens on localhost inside this container only; the
+	# deploy uses it for `caddy reload` after the Caddyfile changes.
+	admin localhost:2019
+}
+
+{$CLAW_HOSTNAME} {
+	encode zstd gzip
+
+	# Access log: request headers included, session cookie and tokens removed.
+	log {
+		output file /data/access.log {
+			roll_size 20MiB
+			roll_keep 5
+		}
+		format filter {
+			wrap json
+			fields {
+				request>headers>Cookie delete
+				request>headers>Authorization delete
+			}
+		}
+	}
+
+	# Identity headers are set by this proxy only; drop anything a client sends.
+	request_header -X-Auth-Request-Email
+	request_header -X-Auth-Request-User
+	request_header -X-Auth-Request-Groups
+	# Client-attribution headers are rebuilt by Caddy (X-Forwarded-For from the
+	# socket peer); drop client-supplied variants the gateway might otherwise
+	# read as a spoof attempt.
+	request_header -X-Real-IP
+	request_header -Forwarded
+	request_header -X-Client-IP
+	request_header -True-Client-IP
+	request_header -X-Forwarded-For
+
+	# Liveness for external monitoring. No session, no identity, no data.
+	handle /healthz {
+		reverse_proxy claw:18789
+	}
+
+	# oauth2-proxy's own endpoints: /oauth2/start, /oauth2/callback, /oauth2/sign_out …
+	handle /oauth2/* {
+		reverse_proxy oauth2-proxy:4180 {
+			header_up X-Real-IP {remote_host}
+		}
+	}
+
+	handle {
+		reverse_proxy oauth2-proxy:4180 {
+			method GET
+			rewrite /oauth2/auth
+			header_up X-Forwarded-Method {method}
+			header_up X-Forwarded-Uri {uri}
+			header_up X-Real-IP {remote_host}
+
+			# Session valid: copy the identity from oauth2-proxy's answer and continue.
+			@good status 2xx
+			handle_response @good {
+				request_header X-Auth-Request-Email {rp.header.X-Auth-Request-Email}
+				request_header X-Auth-Request-User {rp.header.X-Auth-Request-User}
+			}
+
+			# No session: start the login and come back here.
+			@unauthenticated status 401
+			handle_response @unauthenticated {
+				redir * /oauth2/start?rd={uri} 302
+			}
+
+			# 403 (signed in but not allowed) and anything else: oauth2-proxy's
+			# response is returned to the client as-is.
+		}
+
+		reverse_proxy claw:18789 {
+			# The gateway attributes the request to the real client, not to Caddy.
+			header_up X-Forwarded-For {remote_host}
+		}
+	}
+}

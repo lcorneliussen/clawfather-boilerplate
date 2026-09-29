@@ -1,0 +1,102 @@
+#cloud-config
+# First-boot configuration for a claw host. Upstream-owned. Runs once, on the first boot of
+# a new VM; day-2 changes go through the Infrastructure workflow (SSH keys, sizes) or by hand.
+#
+# main.bicep substitutes the placeholders before the VM sees this file:
+#   __CLAW_INSTANCE__   CLAW_INSTANCE — the data root /srv/<instance>, the checkout /opt/<instance>
+#   __ADMIN_USER__      the admin (SSH deploy) user Azure creates from osProfile
+#
+# Azure creates the admin user with its authorised keys and passwordless sudo; this file
+# hardens the host, installs Docker Engine with the Compose plugin, mounts the data disk and
+# prepares the checkout directory. It does not create the Docker network: `bin/claw` (Compose)
+# owns it, with the fixed subnet from core/compose.yml.
+
+package_update: true
+package_upgrade: true
+packages:
+  - ca-certificates
+  - curl
+  - gnupg
+  - jq
+  - rsync
+  - fail2ban
+  - unattended-upgrades
+
+# Persistent state: the attached data disk (LUN 0), formatted as one ext4 filesystem on the
+# whole device (no partition table) exactly once. `overwrite: false` means a rebuilt VM
+# attached to the same disk finds the filesystem and mounts it, keeping the data root.
+fs_setup:
+  - device: /dev/disk/azure/scsi1/lun0
+    partition: none
+    filesystem: ext4
+    label: claw-data
+    overwrite: false
+
+mounts:
+  - ["/dev/disk/azure/scsi1/lun0", "/srv/__CLAW_INSTANCE__", "ext4", "defaults,nofail", "0", "2"]
+
+write_files:
+  - path: /etc/ssh/sshd_config.d/90-claw.conf
+    owner: root:root
+    permissions: "0644"
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitRootLogin no
+      X11Forwarding no
+      AllowUsers __ADMIN_USER__
+
+  - path: /etc/docker/daemon.json
+    owner: root:root
+    permissions: "0644"
+    content: |
+      {
+        "log-driver": "json-file",
+        "log-opts": { "max-size": "50m", "max-file": "5" }
+      }
+
+  # The mount is `nofail` so a missing disk cannot brick the boot — but then Docker must not
+  # start the gateway on an empty directory in the root filesystem.
+  - path: /etc/systemd/system/docker.service.d/10-claw-data.conf
+    owner: root:root
+    permissions: "0644"
+    content: |
+      [Unit]
+      RequiresMountsFor=/srv/__CLAW_INSTANCE__
+
+  - path: /etc/apt/apt.conf.d/52unattended-upgrades-claw
+    owner: root:root
+    permissions: "0644"
+    content: |
+      Unattended-Upgrade::Automatic-Reboot "true";
+      Unattended-Upgrade::Automatic-Reboot-Time "04:30";
+
+  - path: /etc/fail2ban/jail.d/sshd.local
+    owner: root:root
+    permissions: "0644"
+    content: |
+      [sshd]
+      enabled = true
+      backend = systemd
+
+runcmd:
+  # Docker Engine and the Compose plugin from Docker's repository (by distribution codename).
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  - chmod a+r /etc/apt/keyrings/docker.asc
+  - sh -c '. /etc/os-release && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $VERSION_CODENAME stable" > /etc/apt/sources.list.d/docker.list'
+  - apt-get update
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  # The deploy user runs `bin/claw` (docker compose) without sudo.
+  - usermod -aG docker __ADMIN_USER__
+  - systemctl daemon-reload
+  - systemctl enable --now docker
+
+  # The data root is the disk's root directory; `bin/claw init` creates the directories
+  # below it (owned by uid 1000, the gateway's user) on every deploy.
+  - chmod 0755 /srv/__CLAW_INSTANCE__
+  # The repository checkout CI syncs to and runs `bin/claw deploy` from.
+  - install -d -o __ADMIN_USER__ -g __ADMIN_USER__ -m 0755 /opt/__CLAW_INSTANCE__
+
+  - systemctl restart ssh
+  - systemctl enable --now fail2ban
