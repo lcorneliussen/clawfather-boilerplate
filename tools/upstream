@@ -162,7 +162,9 @@ cmd_apply() {
   [[ "$target" != "$(git rev-parse "$UPSTREAM_REF")" ]] || { say "already at $(git rev-parse --short "$target")"; return; }
   read_paths
   patch="$(mktemp)"
-  trap 'rm -f "$patch"' EXIT
+  # Expanded now: `patch` is local and gone by the time EXIT fires.
+  # shellcheck disable=SC2064
+  trap "rm -f '$patch' '$patch.log'" EXIT
   git diff --binary "$UPSTREAM_REF" "$target" -- "${paths[@]}" > "$patch"
   if [[ -s "$patch" ]]; then
     git apply --3way --index "$patch" || status=$?
@@ -181,7 +183,6 @@ cmd_apply() {
   echo "  upstream: clawfather-boilerplate $(git rev-parse --short "$target")"
   echo
   sed 's/^/  /' "$patch.log"
-  rm -f "$patch.log"
   return "$status"
 }
 
