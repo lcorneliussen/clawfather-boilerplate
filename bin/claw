@@ -291,7 +291,7 @@ cmd_open() {
 
 cmd_env() {
   local v
-  for v in CLAW_PROFILE CLAW_INSTANCE CLAW_HOSTNAME CLAW_DATA CLAW_PORT CLAW_IMAGE \
+  for v in CLAW_PROFILE CLAW_INSTANCE CLAW_HOSTNAME CLAW_DATA CLAW_PORT CLAW_IMAGE_NAME CLAW_IMAGE \
            CLAW_CORE_IMAGE CLAW_AUTH_MODE CLAW_TZ; do
     printf '%s=%s\n' "$v" "${!v:-}"
   done

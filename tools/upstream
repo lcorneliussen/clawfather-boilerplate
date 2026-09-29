@@ -239,11 +239,11 @@ cmd_divergence() {
 # .clawfather/private-terms (one extended regex per line). E-mail addresses
 # are checked separately (leaked_emails).
 leak_patterns() {
-  local v value
-  for v in CLAW_INSTANCE CLAW_HOSTNAME CLAW_IMAGE_NAME; do
-    value="$(sed -n "s/^$v=//p" site/claw.env 2>/dev/null | tail -1 | tr -d "\"'")"
-    [[ -n "$value" ]] && printf '%s\n' "$value"
-  done
+  # Resolved as bin/claw resolves them (site/claw.env may compute a value),
+  # then matched literally.
+  bin/claw env 2>/dev/null |
+    sed -nE 's/^(CLAW_INSTANCE|CLAW_HOSTNAME|CLAW_IMAGE_NAME)=(.+)$/\2/p' |
+    sed 's/[][\.*^$+?(){}|/]/\\&/g'
   [[ -f .clawfather/private-terms ]] && grep -v '^[[:space:]]*\(#\|$\)' .clawfather/private-terms
   return 0
 }
