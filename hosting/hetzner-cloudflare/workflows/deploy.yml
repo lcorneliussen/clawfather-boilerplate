@@ -224,7 +224,11 @@ jobs:
             esac
           done
           show_logs
-          ssh "$SSH_HOST" "sudo systemctl stop '$unit'; sudo systemctl reset-failed '$unit'" >/dev/null 2>&1 || true
+          # Clean up only a finished unit. Stopping one that is still running
+          # would interrupt bin/claw deploy past its rollback point.
+          if [[ -n "$result" ]]; then
+            ssh "$SSH_HOST" "sudo systemctl stop '$unit'; sudo systemctl reset-failed '$unit'" >/dev/null 2>&1 || true
+          fi
           case "$result" in
             ok) echo "rollout finished" ;;
             failed) echo "rollout failed (bin/claw restored the previous config)" >&2; exit 1 ;;

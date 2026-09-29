@@ -12,6 +12,33 @@
     opts: defaults,nofail
     state: mounted
 
+# ... but with nofail, Docker could start the stack (restart: unless-stopped)
+# against the empty mount point and grow a second state tree on the OS disk.
+# Docker waits for the volume instead; a host without it stays repairable.
+- name: Create the Docker unit drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/docker.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Make Docker require the data volume
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/docker.service.d/10-claw-data.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      RequiresMountsFor={{ claw_data_root }}
+  register: claw_docker_dropin
+
+- name: Reload systemd after the Docker drop-in changed
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: claw_docker_dropin.changed
+
 - name: Restrict the data root
   ansible.builtin.file:
     path: "{{ claw_data_root }}"

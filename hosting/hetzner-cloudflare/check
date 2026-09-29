@@ -13,12 +13,14 @@ docker run --rm -v "$PWD/infra:/w" -w /w --entrypoint sh ghcr.io/opentofu/opento
 echo "ok: opentofu"
 
 if command -v ansible-playbook >/dev/null; then
-  (cd ansible && ANSIBLE_CONFIG=ansible.cfg ansible-playbook --syntax-check -i inventory.example.yml site.yml >/dev/null)
+  (cd ansible && ansible-galaxy collection install -r requirements.yml >/dev/null &&
+    ANSIBLE_CONFIG=ansible.cfg ansible-playbook --syntax-check -i inventory.example.yml site.yml >/dev/null)
   echo "ok: ansible syntax"
 else
   status=0
   docker run --rm -v "$PWD/ansible:/w:ro" -w /w python:3.13-slim sh -c '
     pip install --quiet --disable-pip-version-check --root-user-action=ignore ansible-core==2.21.4 >/dev/null 2>&1 &&
+    ansible-galaxy collection install -r requirements.yml >/dev/null &&
     ANSIBLE_CONFIG=ansible.cfg ansible-playbook --syntax-check -i inventory.example.yml site.yml' >/dev/null || status=$?
   case "$status" in
     0) echo "ok: ansible syntax" ;;

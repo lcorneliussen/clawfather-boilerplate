@@ -185,6 +185,7 @@ jobs:
           HOST: ${{ steps.env.outputs.host }}
           CLAW_AZURE_CLIENT_ID: ${{ steps.env.outputs.claw_client_id }}
           CLAW_RUNTIME_KEYVAULT: ${{ steps.env.outputs.runtime_kv }}
+          IMAGE: ${{ steps.env.outputs.image_name }}:${{ github.sha }}
         run: |
           set -euo pipefail
           dest="/opt/$CLAW_INSTANCE"
@@ -199,6 +200,9 @@ jobs:
             printf '%s=%q\n' OAUTH2_PROXY_COOKIE_SECRET "$OAUTH2_PROXY_COOKIE_SECRET"
             printf '%s=%q\n' CLAW_AZURE_CLIENT_ID "$CLAW_AZURE_CLIENT_ID"
             printf '%s=%q\n' CLAW_RUNTIME_KEYVAULT "$CLAW_RUNTIME_KEYVAULT"
+            # The deployed image, so an operator's `bin/claw up|logs|openclaw`
+            # on the host resolves it instead of the local default tag.
+            printf '%s=%q\n' CLAW_IMAGE "$IMAGE"
           } | ssh "$HOST" "set -e; umask 077; install -d -m 0700 '$dest/.secrets'; \
                 cat > '$dest/.secrets/claw.env.tmp'; mv -f '$dest/.secrets/claw.env.tmp' '$dest/.secrets/claw.env'"
 
@@ -215,17 +219,25 @@ jobs:
           ssh "$HOST" "cd '/opt/$CLAW_INSTANCE' && env CLAW_IMAGE='$IMAGE' CLAW_BUILD=no bash -s" <<'REMOTE'
           set -euo pipefail
           # oauth2-proxy's allowlist, from site/claw.env. Owned like the other
-          # data directories (uid 1000, which oauth2-proxy runs as); it
-          # watches the file, so a changed list applies without a restart.
+          # data directories (uid 1000, which oauth2-proxy runs as). The
+          # running proxy watches the live file, so the new list is staged
+          # beside it and published only when the rollout succeeded — a
+          # failed deploy keeps the old access policy.
           data="$(bin/claw env | sed -n 's/^CLAW_DATA=//p')"
           emails="$(set -a; . hosting/azure/profile.env; . site/claw.env; printf '%s' "$CLAW_ACCESS_EMAILS")"
+          allowlist="$data/oauth2-proxy/emails.txt"
           sudo install -d -o 1000 -g 1000 -m 0750 "$data/oauth2-proxy"
           jq -r '.[] | ascii_downcase' <<<"$emails" \
-            | sudo install -o 1000 -g 1000 -m 0640 /dev/stdin "$data/oauth2-proxy/emails.txt"
-          echo "allowlist entries: $(sudo wc -l "$data/oauth2-proxy/emails.txt" | cut -d' ' -f1)"
+            | sudo install -o 1000 -g 1000 -m 0640 /dev/stdin "$allowlist.next"
+          trap 'sudo rm -f "$allowlist.next"' EXIT
+          echo "allowlist entries: $(sudo wc -l < "$allowlist.next")"
+          # First deploy: the proxy needs a file to start with.
+          [[ -f "$allowlist" ]] || sudo cp -p "$allowlist.next" "$allowlist"
 
           docker pull --quiet "$CLAW_IMAGE"
           bin/claw deploy
+          sudo mv -f "$allowlist.next" "$allowlist"
+          trap - EXIT
           # compose up does not notice a changed Caddyfile; a reload is
           # graceful and a no-op when nothing changed.
           bin/claw compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
