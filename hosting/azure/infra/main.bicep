@@ -56,6 +56,10 @@ param sshPublicKeys array = []
 @description('CIDRs allowed to reach SSH permanently (operators). CI adds a temporary rule per run.')
 param sshSourceCidrs array = []
 
+var restrictedSshSourceCidrs = contains(sshSourceCidrs, '0.0.0.0/0') || contains(sshSourceCidrs, '::/0')
+  ? fail('SSH source CIDRs must not include a world-open prefix')
+  : sshSourceCidrs
+
 @minValue(32)
 param dataDiskSizeGb int = 64
 
@@ -126,7 +130,7 @@ module network './modules/network.bicep' = {
     name: instance
     location: location
     tags: tags
-    sshSourceCidrs: sshSourceCidrs
+    sshSourceCidrs: restrictedSshSourceCidrs
     dnsLabel: '${instance}-${suffix}'
   }
 }

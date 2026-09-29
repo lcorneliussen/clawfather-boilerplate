@@ -180,6 +180,23 @@ jobs:
           echo "::error::could not reach $HOST over SSH (NSG rule propagation or host key mismatch)"
           exit 1
 
+      - name: Save the running release
+        env:
+          HOST: ${{ steps.env.outputs.host }}
+        run: |
+          set -euo pipefail
+          dest="/opt/$CLAW_INSTANCE"
+          rollback="$dest/.rollback/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          ssh "$HOST" "set -e; umask 077; mkdir -p '$rollback'; \
+            if test -f '$dest/bin/claw'; then \
+              mkdir -p '$rollback/repo'; \
+              rsync -a --exclude=/.git --exclude=/.data --exclude=/.secrets --exclude=/.rollback \
+                '$dest/' '$rollback/repo/'; \
+              if test -f '$dest/.secrets/claw.env'; then \
+                cp -p '$dest/.secrets/claw.env' '$rollback/claw.env'; \
+              fi; \
+            fi"
+
       - name: Ship the repository and secrets
         env:
           HOST: ${{ steps.env.outputs.host }}
@@ -191,7 +208,7 @@ jobs:
           dest="/opt/$CLAW_INSTANCE"
           # Excluded paths are also protected from --delete: host data and
           # secrets survive every sync.
-          rsync -az --delete --exclude=/.git --exclude=/.data --exclude=/.secrets ./ "$HOST:$dest/"
+          rsync -az --delete --exclude=/.git --exclude=/.data --exclude=/.secrets --exclude=/.rollback ./ "$HOST:$dest/"
           # This workflow owns the host's .secrets/claw.env. An instance that needs
           # more secrets adds lines here (from Key Vault or GitHub secrets).
           {
@@ -216,32 +233,32 @@ jobs:
           # ACR accepts its AAD token with this fixed null-GUID user name.
           printf '%s' "$REGISTRY_TOKEN" | ssh "$HOST" \
             "docker login '$REGISTRY' --username 00000000-0000-0000-0000-000000000000 --password-stdin"
-          ssh "$HOST" "cd '/opt/$CLAW_INSTANCE' && env CLAW_IMAGE='$IMAGE' CLAW_BUILD=no bash -s" <<'REMOTE'
-          set -euo pipefail
-          # oauth2-proxy's allowlist, from instance/claw.env. Owned like the other
-          # data directories (uid 1000, which oauth2-proxy runs as). The
-          # running proxy watches the live file, so the new list is staged
-          # beside it and published only when the rollout succeeded — a
-          # failed deploy keeps the old access policy.
-          data="$(bin/claw env | sed -n 's/^CLAW_DATA=//p')"
-          emails="$(set -a; . hosting/azure/profile.env; . instance/claw.env; printf '%s' "$CLAW_ACCESS_EMAILS")"
-          allowlist="$data/oauth2-proxy/emails.txt"
-          sudo install -d -o 1000 -g 1000 -m 0750 "$data/oauth2-proxy"
-          jq -r '.[] | ascii_downcase' <<<"$emails" \
-            | sudo install -o 1000 -g 1000 -m 0640 /dev/stdin "$allowlist.next"
-          trap 'sudo rm -f "$allowlist.next"' EXIT
-          echo "allowlist entries: $(sudo wc -l < "$allowlist.next")"
-          # First deploy: the proxy needs a file to start with.
-          [[ -f "$allowlist" ]] || sudo cp -p "$allowlist.next" "$allowlist"
-
-          docker pull --quiet "$CLAW_IMAGE"
-          bin/claw deploy
-          sudo mv -f "$allowlist.next" "$allowlist"
-          trap - EXIT
-          # compose up does not notice a changed Caddyfile; a reload is
-          # graceful and a no-op when nothing changed.
-          bin/claw compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
-          REMOTE
+          unit="claw-deploy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          rollback="/opt/$CLAW_INSTANCE/.rollback/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          ssh "$HOST" "sudo systemd-run --quiet --unit='$unit' --uid='$SSH_USER' \
+            --service-type=exec --remain-after-exit --working-directory='/opt/$CLAW_INSTANCE' \
+            --setenv=CLAW_IMAGE='$IMAGE' --setenv=CLAW_BUILD=no \
+            --setenv=CLAW_ROLLBACK_DIR='$rollback' \
+            /bin/bash '/opt/$CLAW_INSTANCE/hosting/azure/rollout.sh'"
+          result=""
+          deadline=$((SECONDS + 35 * 60))
+          while ((SECONDS < deadline)); do
+            sleep 5
+            state="$(ssh "$HOST" "systemctl show --property=ActiveState --property=SubState '$unit'" 2>/dev/null)" || continue
+            case "$state" in
+              *ActiveState=failed*|*ActiveState=inactive*) result=failed; break ;;
+              *SubState=exited*) result=ok; break ;;
+            esac
+          done
+          ssh "$HOST" "sudo journalctl --unit='$unit' --output=cat --no-pager -n 200" || true
+          if [[ -n "$result" ]]; then
+            ssh "$HOST" "sudo systemctl stop '$unit'; sudo systemctl reset-failed '$unit'" >/dev/null 2>&1 || true
+          fi
+          case "$result" in
+            ok) echo 'rollout finished' ;;
+            failed) echo 'rollout failed; host-side rollback completed' >&2; exit 1 ;;
+            *) echo "rollout deadline reached; $unit may still be running" >&2; exit 1 ;;
+          esac
 
       - name: Check the public endpoint
         env:
