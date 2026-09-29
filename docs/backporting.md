@@ -20,11 +20,10 @@ tools/upstream divergence                       # what you changed on owned path
 tools/upstream backport <sha>^! -o /tmp/bp      # or a range: A..B
 ```
 
-`backport` exports the commits limited to upstream-owned paths and runs a
-**leak check** over the message and the diff: the site's instance name,
-hostname and image name from `site/claw.env`, every e-mail address, and
-each pattern in `.clawfather/private-terms` (one extended regex per line —
-your org, product, domain, vault names). A hit stops the export.
+`backport` exports the commits limited to upstream-owned paths, rewrites
+their author to you (`--author` to choose), and runs the **leak check** over
+each whole patch — see [publication-guard.md](publication-guard.md). A hit
+stops the export. `-o` must name a new or empty directory.
 
 In a boilerplate checkout:
 

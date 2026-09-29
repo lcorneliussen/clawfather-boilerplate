@@ -31,7 +31,10 @@ Then make it yours:
    for, who runs it, where its secrets live. Link `docs/` for the generic
    parts instead of copying them.
 5. **Agents** — `site/configure.d/` and `site/workspaces/`.
-6. Commit: `derive: from clawfather-boilerplate <short-sha>`.
+6. **Private terms** — your project's, organisation's and domains' names in
+   `.clawfather/private-terms`, so a backport can never carry them
+   ([publication-guard.md](publication-guard.md)).
+7. Commit: `derive: from clawfather-boilerplate <short-sha>`.
 
 Try it locally first, whatever the eventual profile:
 

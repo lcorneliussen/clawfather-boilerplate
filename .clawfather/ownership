@@ -12,6 +12,7 @@ upstream: bin/
 upstream: core/
 upstream: hosting/
 upstream: tools/
+upstream: tests/
 upstream: docs/
 upstream: .clawfather/ownership
 upstream: LICENSE

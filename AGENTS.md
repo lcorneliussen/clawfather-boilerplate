@@ -8,7 +8,8 @@ claws are private copies of it.
 1. **Public.** Nothing here names a real deployment, organisation, domain,
    person, vault or account. Examples use `example.com`, `claw.example.com`,
    `teamclaw`. Issues, PRs and review replies follow the same rule — a fix
-   backported from a derived claw is described generically.
+   backported from a derived claw is described generically. CI enforces
+   this with the publication guard (`docs/publication-guard.md`).
 2. **Mechanisms here, values in `site/`.** An upstream-owned file never holds
    a deployment's value. If a change needs one, add a variable (read from
    `site/claw.env`) or a seam (`docs/extension-points.md`).
