@@ -29,6 +29,7 @@ Lifecycle
   status            compose ps
   logs [service]    follow logs (default: claw)
   health [tries]    wait until the gateway answers /healthz on host loopback
+  open              print the Control UI URL with its token (and open it on a desktop)
 
 Gateway operations (one-off containers with the gateway's exact contract)
   openclaw ARGS...  run the OpenClaw CLI against the state
@@ -76,9 +77,13 @@ load_env() {
 
   # Names defined by the three files, forwarded into one-off containers so
   # configure steps see the same values bin/claw does.
-  CLAW_ENV_NAMES="$(cat "$CLAW_REPO/hosting/$CLAW_PROFILE/profile.env" \
-      "$CLAW_REPO/site/claw.env" "$CLAW_REPO/.secrets/claw.env" 2>/dev/null |
-    sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' | sort -u | tr '\n' ' ')"
+  # (.secrets/claw.env does not exist on a fresh checkout.)
+  CLAW_ENV_NAMES=""
+  for file in "$CLAW_REPO/hosting/$CLAW_PROFILE/profile.env" \
+              "$CLAW_REPO/site/claw.env" "$CLAW_REPO/.secrets/claw.env"; do
+    [[ -f "$file" ]] || continue
+    CLAW_ENV_NAMES+=" $(sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "$file" | tr '\n' ' ')"
+  done
 
   : "${CLAW_INSTANCE:?set CLAW_INSTANCE in site/claw.env}"
   [[ "$CLAW_INSTANCE" =~ ^[a-z][a-z0-9-]*$ ]] || die "CLAW_INSTANCE must be lowercase [a-z0-9-]"
@@ -271,6 +276,19 @@ cmd_deploy() {
   say "deployed $CLAW_IMAGE ($CLAW_PROFILE)"
 }
 
+cmd_open() {
+  gateway_running || die "the gateway is not running (bin/claw up)"
+  # Ask the running gateway: it knows its auth mode and token. It reports its
+  # container port; the host port is CLAW_PORT.
+  local url
+  url="$(docker exec "$(gateway_container)" node dist/index.js dashboard --no-open --json |
+    sed -n 's/.*"url":"\([^"]*\)".*/\1/p')"
+  [[ -n "$url" ]] || die "the gateway returned no dashboard URL"
+  url="${url/:18789\//:$CLAW_PORT/}"
+  echo "$url"
+  if [[ -t 1 ]] && command -v open >/dev/null; then open "$url"; fi
+}
+
 cmd_env() {
   local v
   for v in CLAW_PROFILE CLAW_INSTANCE CLAW_HOSTNAME CLAW_DATA CLAW_PORT CLAW_IMAGE \
@@ -296,6 +314,7 @@ main() {
     status) compose ps "$@" ;;
     logs) compose logs -f "${@:-claw}" ;;
     health) cmd_health "$@" ;;
+    open) cmd_open ;;
     openclaw) run_claw node dist/index.js "$@" ;;
     configure) cmd_configure ;;
     sync-workspaces) cmd_sync_workspaces ;;
