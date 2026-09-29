@@ -69,7 +69,7 @@ owned_paths() {
     [[ -z "$ref" ]] || git show "$ref:$ownership" 2>/dev/null || true
   } | while IFS= read -r line; do
     line="${line%%#*}"; line="${line//[[:space:]]/}"
-    [[ "$line" == upstream:* ]] && printf '%s\n' "${line#upstream:}"
+    if [[ "$line" == upstream:* ]]; then printf '%s\n' "${line#upstream:}"; fi
   done | awk '!seen[$0]++'
   for skip in ${UPSTREAM_SKIP:-}; do
     printf ':(exclude)%s\n' "$skip"
@@ -190,6 +190,11 @@ cmd_apply() {
   git diff --binary "$UPSTREAM_REF" "$target" -- "${paths[@]}" > "$patch"
   if [[ -s "$patch" ]]; then
     git apply --3way --index "$patch" || status=$?
+  fi
+  # Conflicts leave unmerged entries to resolve; any other failure applied
+  # nothing (git apply is atomic) and must not move the base.
+  if ((status)) && [[ -z "$(git ls-files --unmerged)" ]]; then
+    die "the upstream change did not apply and nothing was changed — see the errors above"
   fi
   write_state "$target"
   git add "$state"
