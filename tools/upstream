@@ -36,7 +36,8 @@ Upgrade (boilerplate → this repository)
   apply [REF]         3-way apply that change, then record REF as the new base
 
 Backport (this repository → boilerplate)
-  divergence          your changes to upstream-owned paths since UPSTREAM_REF
+  divergence [--patch]
+                      where upstream-owned paths differ from UPSTREAM_REF
   backport RANGE [-o DIR]
                       export commits in RANGE, limited to upstream-owned paths,
                       as patches for the boilerplate — after a leak check
@@ -188,11 +189,23 @@ cmd_apply() {
 
 cmd_divergence() {
   load_state
-  local paths
   read_paths
-  git log --no-merges --format='%h %s' "$UPSTREAM_REF..HEAD" -- "${paths[@]}"
-  echo
+  # By content, not history: upgrades are applied as patches, so commit
+  # ancestry says nothing about what still differs from the base.
+  if git diff --quiet "$UPSTREAM_REF" HEAD -- "${paths[@]}"; then
+    echo "(none) — upstream-owned paths match the base $(git rev-parse --short "$UPSTREAM_REF")"
+    return
+  fi
+  if [[ "${1:-}" == --patch ]]; then
+    git diff "$UPSTREAM_REF" HEAD -- "${paths[@]}"
+    return
+  fi
   git diff --stat "$UPSTREAM_REF" HEAD -- "${paths[@]}"
+  echo
+  echo "Last commits touching those files (tools/upstream divergence --patch for the diff):"
+  local changed=() f
+  while IFS= read -r f; do changed+=("$f"); done < <(git diff --name-only "$UPSTREAM_REF" HEAD -- "${paths[@]}")
+  git log --no-merges -5 --format='  %h %s' HEAD -- "${changed[@]}"
 }
 
 # Terms that must never reach the public boilerplate: the site's own
@@ -265,7 +278,7 @@ case "$cmd" in
   status) cmd_status "$@" ;;
   diff) cmd_diff "$@" ;;
   apply) cmd_apply "$@" ;;
-  divergence) cmd_divergence ;;
+  divergence) cmd_divergence "$@" ;;
   backport) cmd_backport "$@" ;;
   -h|--help|help) usage ;;
   *) usage; exit 1 ;;
