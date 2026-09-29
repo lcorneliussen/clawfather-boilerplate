@@ -20,6 +20,8 @@ jobs:
         run: tools/check
       - name: Publication guard tests
         run: python3 -I tests/publication_guard_test.py
+      - name: Backport leak check tests
+        run: tests/upstream_backport_test.sh
 
   local-e2e:
     # The local profile runs for real: build, configure, doctor, start, health,

@@ -240,12 +240,14 @@ cmd_divergence() {
 # are checked separately (leaked_emails).
 leak_patterns() {
   # Resolved as bin/claw resolves them (site/claw.env may compute a value),
-  # then matched literally.
-  bin/claw env 2>/dev/null |
-    sed -nE 's/^(CLAW_INSTANCE|CLAW_HOSTNAME|CLAW_IMAGE_NAME)=(.+)$/\2/p' |
+  # then matched literally. Failing to resolve them fails the check.
+  local env
+  env="$(bin/claw env)" || return 1
+  sed -nE 's/^(CLAW_INSTANCE|CLAW_HOSTNAME|CLAW_IMAGE_NAME)=(.+)$/\2/p' <<<"$env" |
     sed 's/[][\.*^$+?(){}|/]/\\&/g'
-  [[ -f .clawfather/private-terms ]] && grep -v '^[[:space:]]*\(#\|$\)' .clawfather/private-terms
-  return 0
+  if [[ -f .clawfather/private-terms ]]; then
+    grep -v '^[[:space:]]*\(#\|$\)' .clawfather/private-terms || true
+  fi
 }
 
 # Every e-mail address in FILE that is not explicitly public: the publishing
@@ -255,9 +257,11 @@ leak_patterns() {
 leaked_emails() {
   local file="$1" author_email="$2" allowed
   allowed="$(printf '%s\n' "$author_email" noreply@anthropic.com @users.noreply.github.com \
-      @example.com @example.org @example.net
-    [[ -f .clawfather/public-emails ]] && grep -v '^[[:space:]]*\(#\|$\)' .clawfather/public-emails)"
-  grep -Eo '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' "$file" | sort -u |
+      @example.com @example.org @example.net)"
+  if [[ -f .clawfather/public-emails ]]; then
+    allowed+=$'\n'"$(grep -v '^[[:space:]]*\(#\|$\)' .clawfather/public-emails || true)"
+  fi
+  { grep -Eo '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' "$file" || true; } | sort -u |
     while IFS= read -r email; do
       local lower entry ok=false
       lower="$(tr '[:upper:]' '[:lower:]' <<<"$email")"
@@ -315,7 +319,10 @@ cmd_backport() {
   # The whole patch leaves — headers, message, diff — so the whole patch is
   # checked. A pattern grep cannot parse stops the export: a check that
   # cannot run must not pass.
-  local hits=0 pattern status
+  # Each helper's output is collected first: a helper that fails must stop
+  # the export, not look like "nothing found" to a loop reading its output.
+  local hits=0 pattern status patterns
+  patterns="$(leak_patterns)" || die "leak check: cannot resolve this site's identifiers (bin/claw env failed)"
   while IFS= read -r pattern; do
     [[ -n "$pattern" ]] || continue
     status=0; grep -Eq -- "$pattern" /dev/null 2>/dev/null || status=$?
@@ -326,14 +333,15 @@ cmd_backport() {
         hits=$((hits + 1))
       fi
     done
-  done < <(leak_patterns)
+  done <<<"$patterns"
   for file in "${patches[@]}"; do
-    local email
+    local email emails
+    emails="$(leaked_emails "$file" "$author_email")" || die "leak check: e-mail scan failed on ${file##*/}"
     while IFS= read -r email; do
       [[ -n "$email" ]] || continue
       say "leak check: e-mail $email in ${file##*/}"
       hits=$((hits + 1))
-    done < <(leaked_emails "$file" "$author_email")
+    done <<<"$emails"
   done
   ((hits == 0)) || die "$hits leak-check hit(s) — generalize the change, then export again (patches left in $out)"
 
