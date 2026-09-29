@@ -74,3 +74,8 @@ does not come up healthy. `bin/claw --help` lists the rest.
 - [Extension points](docs/extension-points.md) — where each kind of change goes.
 - [Upgrading](docs/upgrading.md) — boilerplate → your claw, with `tools/upstream`.
 - [Backporting](docs/backporting.md) — your claw → boilerplate, with a leak check.
+
+## License
+
+[MIT](LICENSE). A derived claw keeps the `LICENSE` file; its own additions
+may be licensed however its owner likes (most stay private).
