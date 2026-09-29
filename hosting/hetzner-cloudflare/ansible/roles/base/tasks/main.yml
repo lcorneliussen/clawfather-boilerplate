@@ -19,12 +19,14 @@
     shell: /bin/bash
     create_home: true
 
+# Exclusive: the inventory list is the whole truth. A key removed from it
+# (a departed operator, a rotated CI key) is removed from the host too.
 - name: Install deployment SSH keys
   ansible.posix.authorized_key:
     user: "{{ deploy_user }}"
-    key: "{{ item }}"
+    key: "{{ deploy_authorized_keys | join('\n') }}"
+    exclusive: true
     state: present
-  loop: "{{ deploy_authorized_keys }}"
 
 # bin/claw creates data directories as uid 1000 and the deploy workflow runs
 # the rollout as a transient systemd unit; both need root without a prompt.
@@ -37,6 +39,9 @@
     mode: "0440"
     validate: /usr/sbin/visudo -cf %s
 
+# The root key from OpenTofu is for the first run only. From here on the
+# deploy user (with sudo) is the only way in: run later plays as
+# ansible_user=deploy (inventory.example.yml).
 - name: Harden SSH authentication
   ansible.builtin.copy:
     dest: /etc/ssh/sshd_config.d/90-claw-hardening.conf
@@ -45,9 +50,9 @@
     content: |
       PasswordAuthentication no
       KbdInteractiveAuthentication no
-      PermitRootLogin prohibit-password
+      PermitRootLogin no
       X11Forwarding no
-      AllowUsers root {{ deploy_user }}
+      AllowUsers {{ deploy_user }}
     owner: root
     group: root
     mode: "0644"

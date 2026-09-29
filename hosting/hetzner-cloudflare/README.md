@@ -93,8 +93,12 @@ commented out.
    ansible-playbook site.yml
    ```
 
+   This first run is the only one as root: the playbook then disables root
+   SSH and makes `deploy_authorized_keys` the exclusive key list. Switch the
+   inventory to `ansible_user: deploy` for every later run.
+
    Record the host key as the `SSH_HOST_PUBLIC_KEY` variable:
-   `ssh root@<ip> cut -d' ' -f1,2 /etc/ssh/ssh_host_ed25519_key.pub`.
+   `ssh deploy@<ip> cut -d' ' -f1,2 /etc/ssh/ssh_host_ed25519_key.pub`.
 
 3. **Light the tunnel once.** CI deploys through the tunnel, and the tunnel
    is part of the stack that the deploy starts. The very first start therefore
