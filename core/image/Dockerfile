@@ -3,9 +3,9 @@
 # a static Docker CLI (for gateways that create sandbox containers through a
 # mounted socket; unused otherwise).
 #
-# Upstream-owned. Site additions go in site/image/Dockerfile, which is built
+# Upstream-owned. Instance additions go in instance/image/Dockerfile, which is built
 # FROM this image (`bin/claw build`). Bump OPENCLAW_IMAGE through
-# site/claw.env (OPENCLAW_IMAGE), not here, unless the boilerplate default moves.
+# instance/claw.env (OPENCLAW_IMAGE), not here, unless the boilerplate default moves.
 ARG OPENCLAW_IMAGE=ghcr.io/openclaw/openclaw:2026.9.6-browser
 
 FROM debian:bookworm-slim AS tool-fetch

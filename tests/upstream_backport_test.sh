@@ -12,9 +12,9 @@ failures=0
 repo="$work/derived"
 mkdir -p "$repo"
 cp -R "$src/bin" "$src/tools" "$src/.clawfather" "$src/docs" "$repo/"
-mkdir -p "$repo/hosting" "$repo/site"
+mkdir -p "$repo/hosting" "$repo/instance"
 cp -R "$src/hosting/local" "$repo/hosting/"
-sed 's/^CLAW_INSTANCE=.*/CLAW_INSTANCE=secretclaw/' "$src/site/claw.env.example" > "$repo/site/claw.env"
+sed 's/^CLAW_INSTANCE=.*/CLAW_INSTANCE=secretclaw/' "$src/instance/claw.env.example" > "$repo/instance/claw.env"
 printf 'orchid-internal\n' > "$repo/.clawfather/private-terms"
 rm -f "$repo/.clawfather/public-emails"
 

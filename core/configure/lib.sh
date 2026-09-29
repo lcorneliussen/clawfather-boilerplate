@@ -3,7 +3,7 @@
 # claw image, so a step sees the gateway's exact env and mounts. Every write
 # goes to the candidate config ($OPENCLAW_CONFIG_PATH), never the live one.
 #
-# Upstream-owned. Site steps (site/configure.d/*.sh) use the same helpers.
+# Upstream-owned. Instance steps (instance/configure.d/*.sh) use the same helpers.
 
 openclaw() { node dist/index.js "$@"; }
 

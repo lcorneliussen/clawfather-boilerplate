@@ -31,21 +31,21 @@ address. CI builds the image, ships this repository to the host and runs
 | `bootstrap.sh` | operator bring-up, one idempotent pass at a time |
 | `workflows/` | templates for `.github/workflows/` — `deploy.yml`, `infrastructure.yml` |
 
-Everything here is upstream-owned. Site changes go through the seams in
+Everything here is upstream-owned. Instance changes go through the seams in
 [docs/extension-points.md](../../docs/extension-points.md): a different
-Caddyfile is a directory mounted over `/etc/caddy` from `site/compose.yml`,
+Caddyfile is a directory mounted over `/etc/caddy` from `instance/compose.yml`,
 another identity provider is `CLAW_OAUTH_PROVIDER` plus any provider-specific
-`OAUTH2_PROXY_*` env on `oauth2-proxy` in `site/compose.yml`.
+`OAUTH2_PROXY_*` env on `oauth2-proxy` in `instance/compose.yml`.
 
 ## Where values go
 
 | Value | Where | Why there |
 |---|---|---|
-| `CLAW_PROFILE=azure`, `CLAW_INSTANCE`, `CLAW_HOSTNAME` | `site/claw.env` | names every Azure resource (`rg-<instance>`, `vm-<instance>` …), the data root and the public host |
-| `CLAW_ACME_EMAIL` | `site/claw.env` | Let's Encrypt contact; Caddy refuses to start without it |
-| `CLAW_ACCESS_DOMAINS` | `site/claw.env` | comma-separated e-mail domains anyone in which may sign in; empty = allowlist only |
-| `CLAW_ACCESS_EMAILS`, `CLAW_ADMIN_EMAILS` | `site/claw.env` | JSON arrays; the deploy writes the first to oauth2-proxy's allowlist, the second becomes `operator.admin` |
-| `CLAW_OAUTH_PROVIDER` | `site/claw.env` | oauth2-proxy provider, default `google` |
+| `CLAW_PROFILE=azure`, `CLAW_INSTANCE`, `CLAW_HOSTNAME` | `instance/claw.env` | names every Azure resource (`rg-<instance>`, `vm-<instance>` …), the data root and the public host |
+| `CLAW_ACME_EMAIL` | `instance/claw.env` | Let's Encrypt contact; Caddy refuses to start without it |
+| `CLAW_ACCESS_DOMAINS` | `instance/claw.env` | comma-separated e-mail domains anyone in which may sign in; empty = allowlist only |
+| `CLAW_ACCESS_EMAILS`, `CLAW_ADMIN_EMAILS` | `instance/claw.env` | JSON arrays; the deploy writes the first to oauth2-proxy's allowlist, the second becomes `operator.admin` |
+| `CLAW_OAUTH_PROVIDER` | `instance/claw.env` | oauth2-proxy provider, default `google` |
 | `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP` | repository variables | OIDC login of the workflows (`bootstrap.sh github`) |
 | `SSH_HOST_PUBLIC_KEY`, `SSH_PUBLIC_KEYS`, `SSH_SOURCE_CIDRS` | repository variables | pinned host key; operator keys and CIDRs for the VM pass |
 | CI SSH key pair, OAuth client id/secret, cookie secret | deploy Key Vault | read by the deploy identity; written to the host's `.secrets/claw.env` on every deploy |
@@ -69,7 +69,7 @@ export SSH_PUBLIC_KEYS='["ssh-ed25519 AAAA… you@laptop"]'   # optional: operat
 export SSH_SOURCE_CIDRS='["203.0.113.4/32"]'                 # optional: operator access
 ```
 
-1. **`site/claw.env`** — set `CLAW_PROFILE=azure`, `CLAW_INSTANCE`,
+1. **`instance/claw.env`** — set `CLAW_PROFILE=azure`, `CLAW_INSTANCE`,
    `CLAW_HOSTNAME`, `CLAW_ACME_EMAIL`, the people; commit.
 2. **`hosting/azure/bootstrap.sh group`**, then **`foundation`** — resource
    group, identities, both Key Vaults, registry, network and the static
@@ -132,8 +132,8 @@ What to look for:
 
 | Change | How |
 |---|---|
-| people, domains | edit `site/claw.env`, push — oauth2-proxy picks up the allowlist file live |
-| OpenClaw version | bump `OPENCLAW_IMAGE` in `site/claw.env`, push |
+| people, domains | edit `instance/claw.env`, push — oauth2-proxy picks up the allowlist file live |
+| OpenClaw version | bump `OPENCLAW_IMAGE` in `instance/claw.env`, push |
 | Caddy / oauth2-proxy version | bump the tag in `compose.yml` (an upstream change) |
 | rotate the OAuth client secret | new secret in the IdP → `bootstrap.sh secrets` → *Deploy* → delete the old one |
 | rotate the cookie secret | `az keyvault secret set … -n oauth2-proxy-cookie-secret --value "$(openssl rand -base64 32 \| tr '+/' '-_')"` → *Deploy* (signs everyone out) |
@@ -170,7 +170,7 @@ restores the previous config if the new one does not come up healthy (see
 
 The gateway container gets `AZURE_CLIENT_ID` (the VM's runtime identity) and
 `AZURE_KEYVAULT_NAME` (the runtime vault). With the Azure CLI added in
-`site/image/Dockerfile`:
+`instance/image/Dockerfile`:
 
 ```bash
 az keyvault secret set --vault-name <runtime vault> -n some-api-token --value '…'   # operator

@@ -22,7 +22,7 @@ tools/upstream init --ref main --skip hosting/azure
 
 Then make it yours:
 
-1. **`site/claw.env`** — `CLAW_PROFILE`, `CLAW_INSTANCE`, hostname, people.
+1. **`instance/claw.env`** — `CLAW_PROFILE`, `CLAW_INSTANCE`, hostname, people.
 2. **Drop unused profiles** — delete `hosting/<other>/`; `init --skip`
    recorded them as `UPSTREAM_SKIP` in `.clawfather/upstream.env`.
 3. **Workflows** — copy `hosting/<profile>/workflows/*.yml` into
@@ -30,7 +30,7 @@ Then make it yours:
 4. **`README.md` / `AGENTS.md`** — rewrite for this deployment: what it is
    for, who runs it, where its secrets live. Link `docs/` for the generic
    parts instead of copying them.
-5. **Agents** — `site/configure.d/` and `site/workspaces/`.
+5. **Agents** — `instance/configure.d/` and `instance/workspaces/`.
 6. **Private terms** — your project's, organisation's and domains' names in
    `.clawfather/private-terms`, so a backport can never carry them
    ([publication-guard.md](publication-guard.md)).

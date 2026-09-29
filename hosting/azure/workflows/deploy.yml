@@ -1,5 +1,5 @@
 # Template — copy to .github/workflows/deploy.yml in a derived repository; it is
-# site-owned from then on. Upstream-owned here.
+# instance-owned from then on. Upstream-owned here.
 #
 # Builds the claw image on the runner and pushes it to the instance's registry,
 # ships this repository to the host, writes the host's .secrets/claw.env from
@@ -8,7 +8,7 @@
 #
 # Repository variables (hosting/azure/bootstrap.sh github): AZURE_CLIENT_ID,
 # AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID, AZURE_RESOURCE_GROUP,
-# SSH_HOST_PUBLIC_KEY. Everything else comes from site/claw.env or Key Vault.
+# SSH_HOST_PUBLIC_KEY. Everything else comes from instance/claw.env or Key Vault.
 name: Deploy
 
 on:
@@ -65,23 +65,23 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Check site configuration
+      - name: Check instance configuration
         run: |
           set -euo pipefail
           for v in RESOURCE_GROUP SSH_HOST_PUBLIC_KEY; do
             [[ -n "${!v}" ]] || { echo "::error::repository variable ${v/RESOURCE_GROUP/AZURE_RESOURCE_GROUP} is not set (hosting/azure/bootstrap.sh github)"; exit 1; }
           done
-          set -a; . hosting/azure/profile.env; . site/claw.env; set +a
-          [[ "$CLAW_PROFILE" == azure ]] || { echo "::error::site/claw.env: CLAW_PROFILE=$CLAW_PROFILE, expected azure"; exit 1; }
+          set -a; . hosting/azure/profile.env; . instance/claw.env; set +a
+          [[ "$CLAW_PROFILE" == azure ]] || { echo "::error::instance/claw.env: CLAW_PROFILE=$CLAW_PROFILE, expected azure"; exit 1; }
           for v in CLAW_INSTANCE CLAW_HOSTNAME CLAW_ACME_EMAIL; do
-            [[ -n "${!v:-}" ]] || { echo "::error::site/claw.env: $v is empty"; exit 1; }
+            [[ -n "${!v:-}" ]] || { echo "::error::instance/claw.env: $v is empty"; exit 1; }
           done
           for v in CLAW_ACCESS_EMAILS CLAW_ADMIN_EMAILS; do
             jq -e 'type == "array" and all(.[]; type == "string" and length > 0)' <<<"${!v:-}" >/dev/null \
-              || { echo "::error::site/claw.env: $v must be a JSON array of e-mails"; exit 1; }
+              || { echo "::error::instance/claw.env: $v must be a JSON array of e-mails"; exit 1; }
           done
           if [[ -z "${CLAW_ACCESS_DOMAINS:-}" && "$(jq length <<<"$CLAW_ACCESS_EMAILS")" -eq 0 ]]; then
-            echo "::error::nobody could sign in: set CLAW_ACCESS_DOMAINS or CLAW_ACCESS_EMAILS in site/claw.env"; exit 1
+            echo "::error::nobody could sign in: set CLAW_ACCESS_DOMAINS or CLAW_ACCESS_EMAILS in instance/claw.env"; exit 1
           fi
           echo "sign-in: domains='${CLAW_ACCESS_DOMAINS:-none}' allowlist=$(jq -c . <<<"$CLAW_ACCESS_EMAILS")"
           { echo "CLAW_INSTANCE=$CLAW_INSTANCE"; echo "CLAW_HOSTNAME=$CLAW_HOSTNAME"; } >> "$GITHUB_ENV"
@@ -109,7 +109,7 @@ jobs:
             echo "image_name=$registry/$CLAW_INSTANCE-openclaw"
           } >> "$GITHUB_OUTPUT"
 
-      # Same build as a workstation's: core image, then the site image FROM it.
+      # Same build as a workstation's: core image, then the instance image FROM it.
       # Tagged with the commit, so the host runs exactly what this run built.
       - name: Build and push the image
         env:
@@ -192,7 +192,7 @@ jobs:
           # Excluded paths are also protected from --delete: host data and
           # secrets survive every sync.
           rsync -az --delete --exclude=/.git --exclude=/.data --exclude=/.secrets ./ "$HOST:$dest/"
-          # This workflow owns the host's .secrets/claw.env. A site that needs
+          # This workflow owns the host's .secrets/claw.env. An instance that needs
           # more secrets adds lines here (from Key Vault or GitHub secrets).
           {
             printf '%s=%q\n' OAUTH2_PROXY_CLIENT_ID "$OAUTH2_PROXY_CLIENT_ID"
@@ -218,13 +218,13 @@ jobs:
             "docker login '$REGISTRY' --username 00000000-0000-0000-0000-000000000000 --password-stdin"
           ssh "$HOST" "cd '/opt/$CLAW_INSTANCE' && env CLAW_IMAGE='$IMAGE' CLAW_BUILD=no bash -s" <<'REMOTE'
           set -euo pipefail
-          # oauth2-proxy's allowlist, from site/claw.env. Owned like the other
+          # oauth2-proxy's allowlist, from instance/claw.env. Owned like the other
           # data directories (uid 1000, which oauth2-proxy runs as). The
           # running proxy watches the live file, so the new list is staged
           # beside it and published only when the rollout succeeded — a
           # failed deploy keeps the old access policy.
           data="$(bin/claw env | sed -n 's/^CLAW_DATA=//p')"
-          emails="$(set -a; . hosting/azure/profile.env; . site/claw.env; printf '%s' "$CLAW_ACCESS_EMAILS")"
+          emails="$(set -a; . hosting/azure/profile.env; . instance/claw.env; printf '%s' "$CLAW_ACCESS_EMAILS")"
           allowlist="$data/oauth2-proxy/emails.txt"
           sudo install -d -o 1000 -g 1000 -m 0750 "$data/oauth2-proxy"
           jq -r '.[] | ascii_downcase' <<<"$emails" \

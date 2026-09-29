@@ -4,10 +4,10 @@
 # Upstream-owned; changes arrive with boilerplate upgrades.
 #
 # Inputs, in one place each:
-#   site/claw.env                 instance, claw hostname, access e-mails —
+#   instance/claw.env                 instance, claw hostname, access e-mails —
 #                                 the same values the gateway uses
-#   site/infra/terraform.tfvars   the rest of the non-secret inputs
-#   site/infra/backend.hcl        the state bucket (no credentials)
+#   instance/infra/terraform.tfvars   the rest of the non-secret inputs
+#   instance/infra/backend.hcl        the state bucket (no credentials)
 #   environment secrets           see `env` below
 name: Infrastructure
 
@@ -75,27 +75,27 @@ jobs:
         with:
           tofu_version: 1.12.6
 
-      - name: Map site/claw.env to OpenTofu inputs
+      - name: Map instance/claw.env to OpenTofu inputs
         working-directory: .
         run: |
           set -euo pipefail
-          # site/claw.env is shell syntax (bin/claw sources it the same way).
+          # instance/claw.env is shell syntax (bin/claw sources it the same way).
           set -a
           # shellcheck disable=SC1091
-          . site/claw.env
+          . instance/claw.env
           set +a
           [[ "${CLAW_PROFILE:-}" == hetzner-cloudflare ]] || {
-            echo "site/claw.env: CLAW_PROFILE is '${CLAW_PROFILE:-}', expected hetzner-cloudflare" >&2
+            echo "instance/claw.env: CLAW_PROFILE is '${CLAW_PROFILE:-}', expected hetzner-cloudflare" >&2
             exit 1
           }
-          [[ -n "${CLAW_HOSTNAME:-}" ]] || { echo "site/claw.env: set CLAW_HOSTNAME" >&2; exit 1; }
+          [[ -n "${CLAW_HOSTNAME:-}" ]] || { echo "instance/claw.env: set CLAW_HOSTNAME" >&2; exit 1; }
           # A JSON array of strings is valid HCL for set(string).
           jq -e 'type == "array" and length > 0 and all(.[]; type == "string")' \
             <<<"${CLAW_ACCESS_EMAILS:-}" >/dev/null || {
-            echo "site/claw.env: CLAW_ACCESS_EMAILS must be a non-empty JSON array" >&2
+            echo "instance/claw.env: CLAW_ACCESS_EMAILS must be a non-empty JSON array" >&2
             exit 1
           }
-          for f in site/infra/backend.hcl site/infra/terraform.tfvars; do
+          for f in instance/infra/backend.hcl instance/infra/terraform.tfvars; do
             [[ -f "$f" ]] || { echo "missing $f (see hosting/hetzner-cloudflare/infra/*.example)" >&2; exit 1; }
           done
           {
@@ -112,7 +112,7 @@ jobs:
           done
 
       - name: Initialize remote state
-        run: tofu init -backend-config="$GITHUB_WORKSPACE/site/infra/backend.hcl"
+        run: tofu init -backend-config="$GITHUB_WORKSPACE/instance/infra/backend.hcl"
 
       - name: Check formatting and validate
         run: |
@@ -120,7 +120,7 @@ jobs:
           tofu validate
 
       - name: Plan
-        run: tofu plan -var-file="$GITHUB_WORKSPACE/site/infra/terraform.tfvars" -out=infrastructure.tfplan
+        run: tofu plan -var-file="$GITHUB_WORKSPACE/instance/infra/terraform.tfvars" -out=infrastructure.tfplan
 
       # Applies exactly the plan printed above, never a fresh one.
       - name: Apply the plan

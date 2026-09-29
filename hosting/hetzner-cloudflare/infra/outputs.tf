@@ -14,7 +14,7 @@ output "volume_linux_device" {
 }
 
 output "claw_hostname" {
-  description = "Set as CLAW_HOSTNAME in site/claw.env."
+  description = "Set as CLAW_HOSTNAME in instance/claw.env."
   value       = local.claw_hostname
 }
 

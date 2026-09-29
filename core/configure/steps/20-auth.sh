@@ -1,6 +1,6 @@
 # shellcheck shell=sh
 # Who may speak to the gateway. The profile chooses the mode in its
-# profile.env; the site supplies the people in site/claw.env. Upstream-owned.
+# profile.env; the instance supplies the people in instance/claw.env. Upstream-owned.
 #
 #   token          a shared bearer token (OPENCLAW_GATEWAY_TOKEN). Local only.
 #   trusted-proxy  a front door authenticates people and forwards their

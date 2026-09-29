@@ -1,5 +1,5 @@
 # check=skip=InvalidDefaultArgInFrom
-# Site image: the core image plus this deployment's tools. Site-owned.
+# Instance image: the core image plus this deployment's tools. Instance-owned.
 #
 # `bin/claw build` builds core/image first and passes it in as CORE_IMAGE, so
 # this file only adds what this deployment needs — a language runtime, a

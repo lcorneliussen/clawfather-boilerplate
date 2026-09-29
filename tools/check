@@ -22,7 +22,7 @@ in_docker() {
 step shellcheck
 shell_files=()
 while IFS= read -r f; do shell_files+=("$f"); done < <(
-  { git ls-files --cached --others --exclude-standard -- bin tools core hosting site |
+  { git ls-files --cached --others --exclude-standard -- bin tools core hosting instance |
       while IFS= read -r f; do
         [[ -f "$f" ]] || continue
         case "$f" in
@@ -43,7 +43,7 @@ step "compose config (every profile, dummy values)"
 dummies=()
 # shellcheck disable=SC2016 # literal ${ in the pattern
 while IFS= read -r name; do dummies+=("$name=check-dummy"); done < <(
-  grep -ho '\${[A-Z_][A-Z0-9_]*:?' core/compose.yml hosting/*/compose.yml site/compose.yml |
+  grep -ho '\${[A-Z_][A-Z0-9_]*:?' core/compose.yml hosting/*/compose.yml instance/compose.yml |
     sed 's/^\${//; s/:?$//' | sort -u |
     grep -vx 'CLAW_INSTANCE\|CLAW_IMAGE\|CLAW_PROFILE\|CLAW_DATA\|CLAW_HOSTNAME')
 for profile_dir in hosting/*/; do
@@ -61,7 +61,7 @@ for profile_dir in hosting/*/; do
 done
 
 step "configure steps parse (sh -n)"
-for f in core/configure/*.sh core/configure/steps/*.sh site/configure.d/*.sh; do
+for f in core/configure/*.sh core/configure/steps/*.sh instance/configure.d/*.sh; do
   [[ -f "$f" ]] || continue
   sh -n "$f" || fail "sh -n $f"
 done

@@ -1,11 +1,11 @@
 # Template — copy to .github/workflows/infrastructure.yml in a derived
-# repository; it is site-owned from then on. Upstream-owned here.
+# repository; it is instance-owned from then on. Upstream-owned here.
 #
 # Bicep what-if / apply for the instance's resource group. The first
 # foundation pass (role assignments) is operator work — see
 # hosting/azure/README.md → Bring-up order. This workflow runs as the deploy
 # identity (Contributor on the group, cannot assign roles) and therefore
-# passes --pipeline. The instance name comes from site/claw.env.
+# passes --pipeline. The instance name comes from instance/claw.env.
 name: Infrastructure
 
 on:

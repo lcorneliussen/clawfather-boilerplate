@@ -1,4 +1,4 @@
-# Site additions to the runtime. Site-owned; the boilerplate ships it empty.
+# Instance additions to the runtime. Instance-owned; the boilerplate ships it empty.
 #
 # Merged after core/compose.yml and hosting/<profile>/compose.yml, so this is
 # where a deployment adds services, env or mounts without editing upstream

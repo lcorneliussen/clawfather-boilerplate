@@ -33,10 +33,10 @@ JWT header. It also repeats the Access e-mail allowlist as a second fence.
 | `hosting/hetzner-cloudflare/infra/*.tf` | upstream | Hetzner server, volume, firewall; tunnel, DNS, Access |
 | `hosting/hetzner-cloudflare/ansible/` | upstream | host bootstrap: hardening, Docker, deploy user, mounts |
 | `hosting/hetzner-cloudflare/workflows/*.yml` | upstream | templates; copy them to `.github/workflows/` |
-| `site/claw.env` | site | instance, hostname, people: read by the gateway **and** by OpenTofu |
-| `site/infra/terraform.tfvars` | site | the remaining non-secret OpenTofu inputs (from `infra/terraform.tfvars.example`) |
-| `site/infra/backend.hcl` | site | state bucket, no credentials (from `infra/backend.hcl.example`) |
-| `.github/workflows/{infrastructure,deploy}.yml` | site copy | re-copy after a boilerplate upgrade; keep local edits minimal |
+| `instance/claw.env` | instance | instance, hostname, people: read by the gateway **and** by OpenTofu |
+| `instance/infra/terraform.tfvars` | instance | the remaining non-secret OpenTofu inputs (from `infra/terraform.tfvars.example`) |
+| `instance/infra/backend.hcl` | instance | state bucket, no credentials (from `infra/backend.hcl.example`) |
+| `.github/workflows/{infrastructure,deploy}.yml` | instance copy | re-copy after a boilerplate upgrade; keep local edits minimal |
 | `ansible/inventory.yml` | operator | local, ignored; from `inventory.example.yml` |
 | `/opt/<instance>/.secrets/claw.env` | deploy workflow | written on every deploy; never edit it on the host |
 
@@ -44,8 +44,8 @@ JWT header. It also repeats the Access e-mail allowlist as a second fence.
 
 | Value | Where | Used by |
 | --- | --- | --- |
-| `CLAW_PROFILE=hetzner-cloudflare`, `CLAW_INSTANCE`, `CLAW_HOSTNAME`, `CLAW_ACCESS_EMAILS`, `CLAW_ADMIN_EMAILS` | `site/claw.env` | gateway config, Access policy (infrastructure workflow maps them to `TF_VAR_*`) |
-| zone, account and zone IDs, bootstrap SSH key, `ssh_source_cidrs`, server size, IdP IDs | `site/infra/terraform.tfvars` | OpenTofu |
+| `CLAW_PROFILE=hetzner-cloudflare`, `CLAW_INSTANCE`, `CLAW_HOSTNAME`, `CLAW_ACCESS_EMAILS`, `CLAW_ADMIN_EMAILS` | `instance/claw.env` | gateway config, Access policy (infrastructure workflow maps them to `TF_VAR_*`) |
+| zone, account and zone IDs, bootstrap SSH key, `ssh_source_cidrs`, server size, IdP IDs | `instance/infra/terraform.tfvars` | OpenTofu |
 | `CLAW_SSH_HOSTNAME`, `SSH_HOST_PUBLIC_KEY`, optional `CLAW_DEPLOY_USER`, `CLAW_PLATFORM` | repository variables | deploy workflow |
 | `HCLOUD_TOKEN`, `CLOUDFLARE_API_TOKEN`, `TOFU_STATE_ACCESS_KEY_ID`, `TOFU_STATE_SECRET_ACCESS_KEY`, optional `GITHUB_OAUTH_CLIENT_ID` / `_SECRET` | `production` environment secrets | infrastructure workflow |
 | `DEPLOY_SSH_PRIVATE_KEY`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET`, `CLOUDFLARE_TUNNEL_TOKEN`, optional `CLAW_SECRETS_ENV` | `production` environment secrets | deploy workflow → host `.secrets/claw.env` |
@@ -60,19 +60,19 @@ commented out.
 
 ## Bring-up order
 
-1. **OpenTofu.** Create `site/infra/backend.hcl` and
-   `site/infra/terraform.tfvars` from the examples. Set
-   `CLAW_PROFILE=hetzner-cloudflare` and `CLAW_HOSTNAME` in `site/claw.env`,
+1. **OpenTofu.** Create `instance/infra/backend.hcl` and
+   `instance/infra/terraform.tfvars` from the examples. Set
+   `CLAW_PROFILE=hetzner-cloudflare` and `CLAW_HOSTNAME` in `instance/claw.env`,
    then run the *Infrastructure* workflow: first `plan`, then `apply`. To run
    it from a workstation instead:
 
    ```sh
    cd hosting/hetzner-cloudflare/infra
-   set -a; . ../../../site/claw.env; set +a
+   set -a; . ../../../instance/claw.env; set +a
    export TF_VAR_instance="$CLAW_INSTANCE" TF_VAR_claw_hostname="$CLAW_HOSTNAME" \
           TF_VAR_claw_access_emails="$CLAW_ACCESS_EMAILS"
-   tofu init -backend-config=../../../site/infra/backend.hcl
-   tofu plan -var-file=../../../site/infra/terraform.tfvars -out=plan && tofu apply plan
+   tofu init -backend-config=../../../instance/infra/backend.hcl
+   tofu plan -var-file=../../../instance/infra/terraform.tfvars -out=plan && tofu apply plan
    ```
 
    Copy the sensitive outputs into the `production` environment:
@@ -147,10 +147,10 @@ commented out.
 
 ## Extending
 
-`extra_ingress` adds tunnel routes ahead of the catch-all 404. A site that
+`extra_ingress` adds tunnel routes ahead of the catch-all 404. An instance that
 serves more hostnames adds them there. One example is a wildcard
 `*.example.com` for per-agent portals served by a sidecar in
-`site/compose.yml`. The site adds its DNS records and an Access application
+`instance/compose.yml`. The instance adds its DNS records and an Access application
 for the new hostnames in its own OpenTofu next to them; the boilerplate ships
 none of that.
 

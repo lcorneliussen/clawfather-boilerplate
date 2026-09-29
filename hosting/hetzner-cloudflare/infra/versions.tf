@@ -19,8 +19,8 @@ terraform {
   }
 
   # Remote state in any S3-compatible bucket (Cloudflare R2 works well):
-  #   tofu init -backend-config=<repo>/site/infra/backend.hcl
-  # The site's backend.hcl holds no credentials; AWS_ACCESS_KEY_ID and
+  #   tofu init -backend-config=<repo>/instance/infra/backend.hcl
+  # The instance's backend.hcl holds no credentials; AWS_ACCESS_KEY_ID and
   # AWS_SECRET_ACCESS_KEY come from the environment. See backend.hcl.example.
   backend "s3" {}
 }

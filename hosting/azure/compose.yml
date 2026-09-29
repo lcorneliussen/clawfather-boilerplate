@@ -6,7 +6,7 @@
 #   internet :443 ─▶ caddy (172.30.0.10) ─ forward auth ─▶ oauth2-proxy :4180
 #                          └─ identity headers ─▶ claw :18789
 #
-# Variables (site/claw.env unless noted):
+# Variables (instance/claw.env unless noted):
 #   CLAW_HOSTNAME         public hostname, e.g. claw.example.com
 #   CLAW_ACME_EMAIL       Let's Encrypt contact
 #   CLAW_OAUTH_PROVIDER   oauth2-proxy provider (default google)
@@ -17,18 +17,18 @@
 #   CLAW_AZURE_CLIENT_ID / CLAW_RUNTIME_KEYVAULT               .secrets/claw.env
 #
 # To change the front door (an extra route, a webhook), mount your own
-# directory over /etc/caddy from site/compose.yml — same target, so Compose
+# directory over /etc/caddy from instance/compose.yml — same target, so Compose
 # replaces this mount instead of adding one:
 #
 #   services:
 #     caddy:
 #       volumes:
-#         - ./site/caddy:/etc/caddy:ro
+#         - ./instance/caddy:/etc/caddy:ro
 services:
   claw:
     environment:
       # The VM's user-assigned runtime identity and the runtime Key Vault it
-      # may read. Used only if the site image carries the Azure CLI:
+      # may read. Used only if the instance image carries the Azure CLI:
       #   az login --identity --client-id "$AZURE_CLIENT_ID"
       AZURE_CLIENT_ID: ${CLAW_AZURE_CLIENT_ID:-}
       AZURE_KEYVAULT_NAME: ${CLAW_RUNTIME_KEYVAULT:-}
@@ -40,8 +40,8 @@ services:
     container_name: ${CLAW_INSTANCE}-caddy
     restart: unless-stopped
     environment:
-      ACME_EMAIL: ${CLAW_ACME_EMAIL:?set CLAW_ACME_EMAIL in site/claw.env}
-      CLAW_HOSTNAME: ${CLAW_HOSTNAME:?set CLAW_HOSTNAME in site/claw.env}
+      ACME_EMAIL: ${CLAW_ACME_EMAIL:?set CLAW_ACME_EMAIL in instance/claw.env}
+      CLAW_HOSTNAME: ${CLAW_HOSTNAME:?set CLAW_HOSTNAME in instance/claw.env}
     volumes:
       # A directory, not the file: an rsync replaces the file's inode, which a
       # single-file bind mount would never see. The deploy reloads Caddy.

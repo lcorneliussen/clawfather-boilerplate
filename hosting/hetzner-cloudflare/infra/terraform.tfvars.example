@@ -1,8 +1,8 @@
-# Site inputs for this profile's OpenTofu. Copy to site/infra/terraform.tfvars
+# Instance inputs for this profile's OpenTofu. Copy to instance/infra/terraform.tfvars
 # and commit it — nothing here is secret. The infrastructure workflow passes it
 # with -var-file.
 #
-# Not here, because site/claw.env already holds them and the workflow maps
+# Not here, because instance/claw.env already holds them and the workflow maps
 # them (one source, so Access and the gateway cannot drift):
 #   instance            <- CLAW_INSTANCE
 #   claw_hostname       <- CLAW_HOSTNAME

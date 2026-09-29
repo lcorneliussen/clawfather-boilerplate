@@ -10,9 +10,9 @@
 *.tfvars
 !*.tfvars.example
 backend.hcl
-# The site's non-secret OpenTofu inputs are committed (CI reads them).
-!site/infra/terraform.tfvars
-!site/infra/backend.hcl
+# The instance's non-secret OpenTofu inputs are committed (CI reads them).
+!instance/infra/terraform.tfvars
+!instance/infra/backend.hcl
 *.retry
 hosting/*/ansible/inventory.yml
 

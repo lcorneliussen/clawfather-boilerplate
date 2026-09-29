@@ -8,7 +8,7 @@ direction.
 claw that has never heard of yours: a bug in `bin/claw`, a hardening option,
 a missing configure helper, a better health check, a new seam. It is
 specific when it names your people, hosts, vaults, agents or products —
-those stay in `site/`.
+those stay in `instance/`.
 
 ## Flow
 

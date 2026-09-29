@@ -5,8 +5,8 @@
 # The running gateway never observes an intermediate state.
 #
 # Runs INSIDE the claw image (`bin/claw configure`). Steps run in name order:
-# all of core/configure/steps/*.sh, then all of site/configure.d/*.sh — so a
-# site step can override anything a core step set.
+# all of core/configure/steps/*.sh, then all of instance/configure.d/*.sh — so an
+# instance step can override anything a core step set.
 #
 # Upstream-owned.
 set -eu
@@ -24,7 +24,7 @@ export OPENCLAW_CONFIG_PATH="$staged"
 # shellcheck source=core/configure/lib.sh
 . /claw/core/configure/lib.sh
 
-for step in /claw/core/configure/steps/*.sh /claw/site/configure.d/*.sh; do
+for step in /claw/core/configure/steps/*.sh /claw/instance/configure.d/*.sh; do
   [ -f "$step" ] || continue
   log "${step#/claw/}"
   # shellcheck disable=SC1090

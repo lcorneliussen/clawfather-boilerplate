@@ -1,7 +1,7 @@
 # shellcheck shell=sh
-# The agents of this deployment. Site-owned; the boilerplate ships one.
+# The agents of this deployment. Instance-owned; the boilerplate ships one.
 #
-# Every agent is an entry here plus a directory under site/workspaces/ with the
+# Every agent is an entry here plus a directory under instance/workspaces/ with the
 # same id. `bin/claw sync-workspaces` copies the instruction files there.
 set_json agents.defaults.skipBootstrap 'true'
 set_json 'agents.entries["main"]' '{

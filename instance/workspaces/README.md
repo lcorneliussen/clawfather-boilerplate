@@ -1,7 +1,7 @@
 # Agent workspaces
 
 One directory per agent, named after the agent id in
-`site/configure.d/`. The files are the agent's instruction files
+`instance/configure.d/`. The files are the agent's instruction files
 (`AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, optional `MEMORY.md`
 seed); OpenClaw injects them into every new session.
 

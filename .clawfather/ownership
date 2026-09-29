@@ -5,7 +5,7 @@
 #            `tools/upstream apply` and sends generic fixes back with
 #            `tools/upstream backport`. Editing one locally is allowed — it
 #            is a visible divergence that `tools/upstream status` reports.
-# site:      the derived repository's. The boilerplate ships a starting point
+# instance:      the derived repository's. The boilerplate ships a starting point
 #            and never changes it for you after the copy.
 
 upstream: bin/
@@ -16,15 +16,15 @@ upstream: tests/
 upstream: docs/
 upstream: .clawfather/ownership
 upstream: LICENSE
-upstream: .gitignore        # sites add ignores in site/.gitignore
+upstream: .gitignore        # instances add ignores in instance/.gitignore
 upstream: .dockerignore
-upstream: site/claw.env.example
-upstream: site/configure.d/README.md
-upstream: site/workspaces/README.md
+upstream: instance/claw.env.example
+upstream: instance/configure.d/README.md
+upstream: instance/workspaces/README.md
 
-site: site/                 # claw.env, compose.yml, image/, configure.d/, workspaces/
-site: .github/workflows/    # copied from hosting/<profile>/workflows/, then yours
-site: .clawfather/upstream.env
-site: .clawfather/private-terms
-site: README.md
-site: AGENTS.md
+instance: instance/                 # claw.env, compose.yml, image/, configure.d/, workspaces/
+instance: .github/workflows/    # copied from hosting/<profile>/workflows/, then yours
+instance: .clawfather/upstream.env
+instance: .clawfather/private-terms
+instance: README.md
+instance: AGENTS.md

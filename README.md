@@ -18,7 +18,7 @@ people ───▶ │ front door: authenticates, forwards identity │
                                    │ trusted-proxy (one pinned address)
                     ┌──────────────▼──────────────┐
                     │ claw: OpenClaw gateway       │  core/
-                    │  image = core + site layer   │
+                    │  image = core + instance layer   │
                     └──────────────┬──────────────┘
                                    │
                         /srv/<instance>  state, workspaces, backups
@@ -30,7 +30,7 @@ Three layers, composed by one command, `bin/claw`:
 |---|---|---|---|
 | core | `core/`, `bin/`, `tools/`, `docs/` | boilerplate | gateway runtime contract, image base, configure steps, the CLI |
 | hosting profile | `hosting/<profile>/` | boilerplate | provider-native IaC, host bootstrap, front door, workflow templates |
-| site | `site/`, `.github/workflows/` | your deployment | values, image additions, extra services, agents, workspaces |
+| instance | `instance/`, `.github/workflows/` | your deployment | values, image additions, extra services, agents, workspaces |
 
 The authoritative ownership map is [`.clawfather/ownership`](.clawfather/ownership).
 
@@ -61,7 +61,7 @@ credentials live in the state volume, not in the repository.
 
 Every operation — on a workstation, on a host over SSH, in CI — goes through
 `bin/claw`, so the gateway's env and mounts are defined once
-(`core/compose.yml` + profile + site). `bin/claw deploy` is the ordered
+(`core/compose.yml` + profile + instance). `bin/claw deploy` is the ordered
 rollout: data dirs, image, **verified backup**, workspace sync, **candidate
 config** built and validated beside the live one, stop, publish, **offline
 doctor**, start, health — and it restores the previous config if the new one

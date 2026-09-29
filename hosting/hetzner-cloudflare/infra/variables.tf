@@ -1,7 +1,7 @@
 # Instance and names ---------------------------------------------------------
 
 variable "instance" {
-  description = "Instance slug (CLAW_INSTANCE in site/claw.env). Names every resource."
+  description = "Instance slug (CLAW_INSTANCE in instance/claw.env). Names every resource."
   type        = string
 
   validation {
@@ -131,7 +131,7 @@ variable "service_token_duration" {
 
 variable "extra_ingress" {
   description = <<-EOT
-    Additional tunnel routes, placed before the catch-all 404. A site
+    Additional tunnel routes, placed before the catch-all 404. An instance
     extension (for example, a wildcard for per-agent portals served by a
     sidecar) adds its hostnames here — plus the DNS records and Access
     applications that cover them.

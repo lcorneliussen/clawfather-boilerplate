@@ -10,7 +10,7 @@
 // The pipeline identity holds Contributor on the group and may not assign roles.
 targetScope = 'resourceGroup'
 
-@description('Instance slug (CLAW_INSTANCE in site/claw.env): names every resource and the host data root /srv/<instance>')
+@description('Instance slug (CLAW_INSTANCE in instance/claw.env): names every resource and the host data root /srv/<instance>')
 @minLength(2)
 @maxLength(24)
 param instance string

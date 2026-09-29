@@ -75,7 +75,7 @@ jobs:
           resolved="$(bin/claw env)"
           get() { sed -n "s/^$1=//p" <<<"$resolved"; }
           [[ "$(get CLAW_PROFILE)" == hetzner-cloudflare ]] || {
-            echo "site/claw.env: CLAW_PROFILE must be hetzner-cloudflare" >&2; exit 1; }
+            echo "instance/claw.env: CLAW_PROFILE must be hetzner-cloudflare" >&2; exit 1; }
           [[ -n "$SSH_HOST" ]] || { echo "set the CLAW_SSH_HOSTNAME repository variable" >&2; exit 1; }
           instance="$(get CLAW_INSTANCE)"
           {

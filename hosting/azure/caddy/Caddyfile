@@ -9,9 +9,9 @@
 # Upstreams are Compose service names on the claw network.
 # Environment (hosting/azure/compose.yml): ACME_EMAIL, CLAW_HOSTNAME.
 #
-# Site-specific routes (a signed webhook, a preview host) do not belong here:
-# copy this directory to site/caddy/, add a `handle` block, and mount it over
-# /etc/caddy from site/compose.yml (see the header of hosting/azure/compose.yml).
+# Instance-specific routes (a signed webhook, a preview host) do not belong here:
+# copy this directory to instance/caddy/, add a `handle` block, and mount it over
+# /etc/caddy from instance/compose.yml (see the header of hosting/azure/compose.yml).
 
 {
 	email {$ACME_EMAIL}

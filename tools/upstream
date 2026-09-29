@@ -7,7 +7,7 @@
 #   upgrade   boilerplate → derived   status, diff, apply
 #   backport  derived → boilerplate   divergence, backport
 #
-# It works on the upstream-owned paths only (.clawfather/ownership). Site-owned
+# It works on the upstream-owned paths only (.clawfather/ownership). Instance-owned
 # paths are never touched by an upgrade and never offered for a backport.
 #
 # State: .clawfather/upstream.env in the derived repository —
@@ -234,12 +234,12 @@ cmd_divergence() {
   git log --no-merges -5 --format='  %h %s' HEAD -- "${changed[@]}"
 }
 
-# Terms that must never reach the public boilerplate: the site's own
-# identifiers from site/claw.env and whatever the site lists in
+# Terms that must never reach the public boilerplate: the instance's own
+# identifiers from instance/claw.env and whatever the instance lists in
 # .clawfather/private-terms (one extended regex per line). E-mail addresses
 # are checked separately (leaked_emails).
 leak_patterns() {
-  # Resolved as bin/claw resolves them (site/claw.env may compute a value),
+  # Resolved as bin/claw resolves them (instance/claw.env may compute a value),
   # then matched literally. Failing to resolve them fails the check.
   local env
   env="$(bin/claw env)" || return 1
@@ -322,7 +322,7 @@ cmd_backport() {
   # Each helper's output is collected first: a helper that fails must stop
   # the export, not look like "nothing found" to a loop reading its output.
   local hits=0 pattern status patterns
-  patterns="$(leak_patterns)" || die "leak check: cannot resolve this site's identifiers (bin/claw env failed)"
+  patterns="$(leak_patterns)" || die "leak check: cannot resolve this instance's identifiers (bin/claw env failed)"
   while IFS= read -r pattern; do
     [[ -n "$pattern" ]] || continue
     status=0; grep -Eq -- "$pattern" /dev/null 2>/dev/null || status=$?

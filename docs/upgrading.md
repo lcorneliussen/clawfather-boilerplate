@@ -22,9 +22,9 @@ Then open a PR as for any other change; the deploy workflow rolls it out.
 - `apply` computes `UPSTREAM_REF..<target>` on upstream-owned paths
   (`.clawfather/ownership`, minus `UPSTREAM_SKIP`) and applies it with
   `git apply --3way`. Where you diverged, you get conflict markers, exactly
-  as in a merge. Site-owned paths are never touched.
-- Changes to `site/*.example` and the `site/**/README.md` files arrive too;
-  compare them with your own `site/` files by hand — that is where new
+  as in a merge. Instance-owned paths are never touched.
+- Changes to `instance/*.example` and the `instance/**/README.md` files arrive too;
+  compare them with your own `instance/` files by hand — that is where new
   settings show up.
 - `hosting/<profile>/workflows/` changes arrive in the templates, not in
   your `.github/workflows/`. Diff and port them by hand:
@@ -46,4 +46,4 @@ instead of `main`.
 
 Commits in the boilerplate name the seam they touch in the subject
 (`core:`, `hosting/azure:`, `tools:`, `docs:`) and call out anything that
-needs a site action under **Site action:** in the body. `status` lists them.
+needs an instance action under **Instance action:** in the body. `status` lists them.

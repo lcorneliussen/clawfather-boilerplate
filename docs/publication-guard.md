@@ -8,8 +8,8 @@ each side of the boundary:
 ## Before it leaves: `tools/upstream backport` (derived side)
 
 Every backport is checked as a whole patch — author header, message, diff —
-against the site's instance, hostname and image name (`site/claw.env`),
-the site's `.clawfather/private-terms` (one extended regex per line), and
+against the instance's instance, hostname and image name (`instance/claw.env`),
+the instance's `.clawfather/private-terms` (one extended regex per line), and
 every e-mail address that is not explicitly public. The author is rewritten
 to the publisher's identity, so private contributors never reach the public
 history. Any hit, or a pattern that cannot be parsed, stops the export.

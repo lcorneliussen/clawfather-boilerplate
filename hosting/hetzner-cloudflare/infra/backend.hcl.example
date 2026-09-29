@@ -1,4 +1,4 @@
-# S3-compatible backend settings. Copy to site/infra/backend.hcl and commit
+# S3-compatible backend settings. Copy to instance/infra/backend.hcl and commit
 # it — it holds no credentials (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY come
 # from the environment). Shown for Cloudflare R2; any S3-compatible store works.
 bucket = "REPLACE_ME-tofu-state"

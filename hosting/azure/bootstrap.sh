@@ -17,7 +17,7 @@
 #   --what-if    Bicep what-if instead of apply (foundation, vm)
 #   --pipeline   running as the GitHub deploy identity: no role assignments, no officer
 #
-# The instance comes from site/claw.env (CLAW_INSTANCE, CLAW_HOSTNAME); the environment wins.
+# The instance comes from instance/claw.env (CLAW_INSTANCE, CLAW_HOSTNAME); the environment wins.
 #
 # Environment:
 #   AZURE_SUBSCRIPTION_ID   required
@@ -47,18 +47,18 @@ for arg in "$@"; do
   esac
 done
 
-# Resolve the site's values the same way every other command does: bin/claw
-# (profile defaults, then site/claw.env, then the caller's environment).
-site_value() { # <name>
+# Resolve the instance's values the same way every other command does: bin/claw
+# (profile defaults, then instance/claw.env, then the caller's environment).
+instance_value() { # <name>
   bin/claw env | sed -n "s/^$1=//p"
 }
 
-profile="$(site_value CLAW_PROFILE)"
-[[ "$profile" == azure ]] || echo "warning: site/claw.env has CLAW_PROFILE=${profile:-<unset>}, not azure" >&2
-instance="$(site_value CLAW_INSTANCE)"
+profile="$(instance_value CLAW_PROFILE)"
+[[ "$profile" == azure ]] || echo "warning: instance/claw.env has CLAW_PROFILE=${profile:-<unset>}, not azure" >&2
+instance="$(instance_value CLAW_INSTANCE)"
 [[ "$instance" =~ ^[a-z][a-z0-9-]{1,23}$ ]] \
   || { echo "CLAW_INSTANCE must be 2-24 chars of [a-z0-9-], got '${instance}'" >&2; exit 2; }
-claw_hostname="$(site_value CLAW_HOSTNAME)"
+claw_hostname="$(instance_value CLAW_HOSTNAME)"
 
 : "${AZURE_SUBSCRIPTION_ID:?Set AZURE_SUBSCRIPTION_ID}"
 location="${LOCATION:-westeurope}"

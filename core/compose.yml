@@ -4,17 +4,17 @@
 #
 #   core/compose.yml                  this file — the gateway, its mounts and hardening
 #   hosting/<profile>/compose.yml     the profile's front door (proxy, tunnel, auth env)
-#   site/compose.yml                  the site's additions (extra services, mounts, env)
+#   instance/compose.yml              the instance's additions (extra services, mounts, env)
 #
-# Later files extend or override earlier ones (Compose merge rules), so a site
-# adds a database, a mount or an env var in site/compose.yml without touching
+# Later files extend or override earlier ones (Compose merge rules), so an instance
+# adds a database, a mount or an env var in instance/compose.yml without touching
 # this file. Every one-off OpenClaw command (`claw openclaw …`, configure,
 # backup, doctor) runs as `compose run claw …` and therefore sees exactly the
 # same env and mounts as the gateway itself.
 #
-# Variables come from site/claw.env (committed, non-secret) and
+# Variables come from instance/claw.env (committed, non-secret) and
 # .secrets/claw.env (ignored); `bin/claw` exports both.
-name: ${CLAW_INSTANCE:?set CLAW_INSTANCE in site/claw.env}
+name: ${CLAW_INSTANCE:?set CLAW_INSTANCE in instance/claw.env}
 
 services:
   claw:
