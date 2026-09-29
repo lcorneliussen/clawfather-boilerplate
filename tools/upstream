@@ -261,7 +261,7 @@ leaked_emails() {
   if [[ -f .clawfather/public-emails ]]; then
     allowed+=$'\n'"$(grep -v '^[[:space:]]*\(#\|$\)' .clawfather/public-emails || true)"
   fi
-  { grep -Eo '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' "$file" || true; } | sort -u |
+  { grep -Eo '[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*' "$file" || true; } | sort -u |
     while IFS= read -r email; do
       local lower entry ok=false
       lower="$(tr '[:upper:]' '[:lower:]' <<<"$email")"

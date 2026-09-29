@@ -53,23 +53,29 @@ git branch -M main
 
 probe clean pass "Generic wording only."
 probe private-email fail "contact someone@private-corp.test"
+probe single-label-email fail "contact someone@private-corp"
+probe punycode-email fail "contact someone@xn--private-corp"
 probe public-noreply pass "Co-Authored-By: Bot <noreply@anthropic.com>"
 probe example-email pass "ops@example.com"
 probe instance-name fail "runs on secretclaw"
 probe private-term fail "the orchid-internal project"
 probe private-author pass "Generic again." "Private Colleague <colleague@private-corp.test>"
 
-printf '(unclosed\n' >> .clawfather/private-terms && git commit -qam "bad pattern"
-printf 'UPSTREAM_URL=%s\nUPSTREAM_REF=%s\nUPSTREAM_SKIP=""\n' "$src" "$(git rev-parse HEAD)" > .clawfather/upstream.env
-git commit -qam "rebase state"
-probe malformed-pattern fail "Generic text."
-
+# Use a known docs-changing commit with valid patterns. This must fail only
+# because the requested output directory already contains a patch.
 mkdir -p "$work/stale" && touch "$work/stale/old.patch"
+git checkout -q probe-clean
 if tools/upstream backport HEAD^! -o "$work/stale" >/dev/null 2>&1; then
   echo "FAIL: non-empty output directory accepted"; failures=$((failures + 1))
 else
   echo "ok: stale output directory refused"
 fi
+git checkout -q main
+
+printf '(unclosed\n' >> .clawfather/private-terms && git commit -qam "bad pattern"
+printf 'UPSTREAM_URL=%s\nUPSTREAM_REF=%s\nUPSTREAM_SKIP=""\n' "$src" "$(git rev-parse HEAD)" > .clawfather/upstream.env
+git commit -qam "rebase state"
+probe malformed-pattern fail "Generic text."
 
 ((failures == 0)) || { echo "$failures failure(s)"; exit 1; }
 echo "all backport checks passed"

@@ -52,7 +52,7 @@ for profile_dir in hosting/*/; do
   if env -i PATH="$PATH" HOME="$HOME" DOCKER_HOST="${DOCKER_HOST:-}" \
       CLAW_PROFILE="$profile" CLAW_INSTANCE=checkclaw CLAW_DATA=/tmp/checkclaw \
       CLAW_IMAGE=checkclaw-openclaw:check CLAW_HOSTNAME=claw.example.com \
-      CLAW_ACME_EMAIL=ops@example.com "${dummies[@]}" \
+      CLAW_ACME_EMAIL=ops@example.com ${dummies[@]+"${dummies[@]}"} \
       bin/claw compose config --quiet; then
     echo "ok: $profile"
   else
