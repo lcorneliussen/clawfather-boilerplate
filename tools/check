@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# check — the static checks CI runs, runnable on a workstation.
+#
+# Upstream-owned. Uses native tools when installed and their pinned container
+# images otherwise, so a workstation needs only Docker. Profiles a derived
+# repository dropped (UPSTREAM_SKIP) are skipped because their directories
+# are gone.
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+failures=0
+
+step() { printf '\n== %s\n' "$*"; }
+fail() { echo "FAIL: $*" >&2; failures=$((failures + 1)); }
+
+in_docker() {
+  local image="$1"; shift
+  docker run --rm -v "$root:/w" -w /w "$image" "$@"
+}
+
+step shellcheck
+shell_files=()
+while IFS= read -r f; do shell_files+=("$f"); done < <(
+  { git ls-files --cached --others --exclude-standard -- bin tools core hosting site |
+      while IFS= read -r f; do
+        [[ -f "$f" ]] || continue
+        case "$f" in
+          (*.sh) echo "$f" ;;
+          (*.*) ;;
+          (*) head -1 "$f" | grep -Eq '^#!.*(ba)?sh' && echo "$f" ;;
+        esac
+      done; } | sort -u)
+if command -v shellcheck >/dev/null; then
+  shellcheck -x "${shell_files[@]}" || fail shellcheck
+else
+  in_docker koalaman/shellcheck:v0.10.0 -x "${shell_files[@]}" || fail shellcheck
+fi
+
+step "compose config (every profile, dummy values)"
+# Every ${NAME:?…} a profile requires gets a dummy, so the check proves the
+# merge and the interpolation, not the presence of real secrets.
+dummies=()
+# shellcheck disable=SC2016 # literal ${ in the pattern
+while IFS= read -r name; do dummies+=("$name=check-dummy"); done < <(
+  grep -ho '\${[A-Z_][A-Z0-9_]*:?' core/compose.yml hosting/*/compose.yml site/compose.yml |
+    sed 's/^\${//; s/:?$//' | sort -u |
+    grep -vx 'CLAW_INSTANCE\|CLAW_IMAGE\|CLAW_PROFILE\|CLAW_DATA\|CLAW_HOSTNAME')
+for profile_dir in hosting/*/; do
+  profile="$(basename "$profile_dir")"
+  [[ -f "$profile_dir/compose.yml" ]] || continue
+  if env -i PATH="$PATH" HOME="$HOME" DOCKER_HOST="${DOCKER_HOST:-}" \
+      CLAW_PROFILE="$profile" CLAW_INSTANCE=checkclaw CLAW_DATA=/tmp/checkclaw \
+      CLAW_IMAGE=checkclaw-openclaw:check CLAW_HOSTNAME=claw.example.com \
+      CLAW_ACME_EMAIL=ops@example.com "${dummies[@]}" \
+      bin/claw compose config --quiet; then
+    echo "ok: $profile"
+  else
+    fail "compose config: $profile"
+  fi
+done
+
+step "configure steps parse (sh -n)"
+for f in core/configure/*.sh core/configure/steps/*.sh site/configure.d/*.sh; do
+  [[ -f "$f" ]] || continue
+  sh -n "$f" || fail "sh -n $f"
+done
+
+# Profile validators: each profile may ship an executable check script.
+for check in hosting/*/check; do
+  [[ -x "$check" ]] || continue
+  step "$check"
+  "$check" || fail "$check"
+done
+
+echo
+if ((failures)); then echo "$failures check(s) failed" >&2; exit 1; fi
+echo "all checks passed"

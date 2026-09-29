@@ -1,0 +1,26 @@
+# Who owns which path — the contract between the boilerplate and a derived
+# repository. `tools/upstream` reads the `upstream:` lines (git pathspecs).
+#
+# upstream:  the boilerplate's. A derived repository takes changes here with
+#            `tools/upstream apply` and sends generic fixes back with
+#            `tools/upstream backport`. Editing one locally is allowed — it
+#            is a visible divergence that `tools/upstream status` reports.
+# site:      the derived repository's. The boilerplate ships a starting point
+#            and never changes it for you after the copy.
+
+upstream: bin/
+upstream: core/
+upstream: hosting/
+upstream: tools/
+upstream: docs/
+upstream: .clawfather/ownership
+upstream: site/claw.env.example
+upstream: site/configure.d/README.md
+upstream: site/workspaces/README.md
+
+site: site/                 # claw.env, compose.yml, image/, configure.d/, workspaces/
+site: .github/workflows/    # copied from hosting/<profile>/workflows/, then yours
+site: .clawfather/upstream.env
+site: .clawfather/private-terms
+site: README.md
+site: AGENTS.md
