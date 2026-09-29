@@ -171,6 +171,16 @@ cmd_apply() {
   local target paths patch status=0
   target="$(fetch "${1:-main}")"
   require_descendant "$target"
+  # An upgrade is carried out by the target's version of this tool, so a
+  # fix to the upgrade itself applies to the upgrade that brings it.
+  if [[ -z "${CLAW_UPSTREAM_TARGET_TOOL:-}" ]] &&
+     ! git show "$target:tools/upstream" | cmp -s - "$0"; then
+    local tool
+    tool="$(mktemp)"
+    git show "$target:tools/upstream" > "$tool"
+    say "using tools/upstream from $(git rev-parse --short "$target")"
+    CLAW_UPSTREAM_TARGET_TOOL=1 exec bash "$tool" apply "$target"
+  fi
   [[ "$target" != "$(git rev-parse "$UPSTREAM_REF")" ]] || { say "already at $(git rev-parse --short "$target")"; return; }
   read_paths "$target"
   patch="$(mktemp)"
