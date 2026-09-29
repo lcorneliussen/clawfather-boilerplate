@@ -312,7 +312,11 @@ cmd_backport() {
   local file
   for file in "${patches[@]}"; do
     # First From: header only; `git am` takes the author from it.
-    awk -v a="From: $author" '!done && /^From: / { print a; done = 1; next } { print }' \
+    awk -v a="From: $author" '
+      !done && /^From: / { print a; done = 1; replacing = 1; next }
+      replacing && /^[ \t]/ { next }
+      { replacing = 0; print }
+    ' \
       "$file" > "$file.tmp" && mv "$file.tmp" "$file"
   done
 

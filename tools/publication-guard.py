@@ -71,6 +71,39 @@ class API:
                 return result
         raise ValueError('pagination incomplete')
 
+    def commit_files(self, sha, cap=3000):
+        if not re.fullmatch('[0-9a-f]{40}', sha):
+            raise ValueError('invalid commit')
+        files = []
+        for page in range(1, cap // 100 + 2):
+            data = self.get(f'commits/{sha}?per_page=100&page={page}')
+            batch = data.get('files')
+            if not isinstance(batch, list):
+                raise ValueError('invalid commit files')
+            files.extend(batch)
+            if len(files) >= cap:
+                raise ValueError('commit file limit')
+            if len(batch) < 100:
+                return files
+        raise ValueError('commit pagination incomplete')
+
+
+def scan_file(api, guard, file):
+    # Removed paths/content do not block cleanup of an earlier disclosure.
+    if file['status'] == 'removed':
+        return
+    guard.scan(file['filename'])
+    sha = file['sha']
+    if not re.fullmatch('[0-9a-f]{40}', sha):
+        raise ValueError('invalid blob')
+    blob = api.get('git/blobs/' + sha)
+    if blob.get('encoding') != 'base64' or blob.get('size', LIMIT + 1) > LIMIT:
+        raise ValueError('unsupported blob')
+    content = base64.b64decode(blob['content'], validate=False)
+    if len(content) != blob['size']:
+        raise ValueError('incomplete blob')
+    guard.scan(content.decode('utf-8', errors='replace'))
+
 
 def inspect_pr(api, guard, number):
     if not isinstance(number, int) or number < 1:
@@ -85,22 +118,12 @@ def inspect_pr(api, guard, number):
         # Author and committer identities persist in public history too.
         data = commit['commit']
         guard.scan([data['message'], data.get('author'), data.get('committer')])
+        # A later commit may remove a restricted blob, but the earlier blob
+        # remains addressable in public history. Inspect each commit's changes.
+        for file in api.commit_files(commit['sha']):
+            scan_file(api, guard, file)
     for file in api.pages(path + '/files'):
-        # Removed names/content do not block cleanup of an earlier disclosure.
-        if file['status'] == 'removed':
-            continue
-        guard.scan(file['filename'])
-        # Read immutable blobs as data; never check out or execute PR content.
-        sha = file['sha']
-        if not re.fullmatch('[0-9a-f]{40}', sha):
-            raise ValueError('invalid blob')
-        blob = api.get('git/blobs/' + sha)
-        if blob.get('encoding') != 'base64' or blob.get('size', LIMIT + 1) > LIMIT:
-            raise ValueError('unsupported blob')
-        content = base64.b64decode(blob['content'], validate=False)
-        if len(content) != blob['size']:
-            raise ValueError('incomplete blob')
-        guard.scan(content.decode('utf-8', errors='replace'))
+        scan_file(api, guard, file)
     for endpoint in (f'issues/{number}/comments', path + '/reviews', path + '/comments'):
         for item in api.pages(endpoint):
             guard.scan(item.get('body'))

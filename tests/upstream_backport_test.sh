@@ -43,9 +43,12 @@ probe() {
   else
     echo "FAIL: $name expected $expect, got status $status"; failures=$((failures + 1))
   fi
-  if [[ "$name" == private-author && $status -eq 0 ]]; then
+  if [[ "$name" == private-author || "$name" == folded-author ]] && ((status == 0)); then
     grep -q '^From: Test Publisher <publisher@example.com>' "$out"/*.patch ||
       { echo "FAIL: author not rewritten"; failures=$((failures + 1)); }
+    if sed -n '/^From: /,/^Date: /p' "$out"/*.patch | grep -Eq '^[[:space:]]+.*=\?UTF-8'; then
+      echo "FAIL: folded author continuation retained"; failures=$((failures + 1))
+    fi
   fi
   git checkout -q main 2>/dev/null || git checkout -q master
 }
@@ -63,6 +66,7 @@ probe example-email pass "ops@example.com"
 probe instance-name fail "runs on secretclaw"
 probe private-term fail "the orchid-internal project"
 probe private-author pass "Generic again." "Private Colleague <colleague@private-corp.test>"
+probe folded-author pass "Generic again." "Crème-secret Long Long Long Long Long Long Long Long Long Long Long Long Name <publisher@example.com>"
 
 git checkout -q -B probe-encoded-subject main
 printf 'Generic wording.\n' >> docs/upgrading.md

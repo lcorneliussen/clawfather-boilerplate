@@ -19,13 +19,19 @@ class FakeAPI:
         self.content = b'ordinary text'
         self.file = {'status': 'modified', 'filename': 'example.txt', 'sha': 'b' * 40}
         self.pr = {'title': 'Generic update', 'body': '', 'head': {'sha': 'a' * 40, 'ref': 'feature/example'}}
-        self.messages = [{'commit': {'message': 'Generic change'}}]
+        self.messages = [{'sha': 'c' * 40, 'commit': {'message': 'Generic change'}}]
         self.comments = []
+        self.blobs = {}
+        self.files_by_commit = {}
 
     def get(self, path):
         if path.startswith('git/blobs/'):
-            return {'encoding': 'base64', 'size': len(self.content), 'content': base64.b64encode(self.content).decode()}
+            content = self.blobs.get(path.removeprefix('git/blobs/'), self.content)
+            return {'encoding': 'base64', 'size': len(content), 'content': base64.b64encode(content).decode()}
         return self.pr
+
+    def commit_files(self, sha):
+        return self.files_by_commit.get(sha, [self.file])
 
     def pages(self, path, cap=3000):
         if path.endswith('/files'):
@@ -90,6 +96,21 @@ class Tests(unittest.TestCase):
         m.inspect_pr(api, guard, 1)
         self.assertFalse(guard.found)
 
+    def test_removed_intermediate_blob_is_still_scanned(self):
+        api = FakeAPI()
+        added, removed, blob = 'c' * 40, 'd' * 40, 'e' * 40
+        api.messages = [{'sha': added, 'commit': {'message': 'Add file'}},
+                        {'sha': removed, 'commit': {'message': 'Remove file'}}]
+        api.files_by_commit = {
+            added: [{'status': 'added', 'filename': 'example.txt', 'sha': blob}],
+            removed: [{'status': 'removed', 'filename': 'example.txt', 'sha': blob}],
+        }
+        api.blobs[blob] = b'Orchid.Example'
+        api.file.update(status='removed')
+        guard = m.Guard('orchid.example')
+        m.inspect_pr(api, guard, 1)
+        self.assertTrue(guard.found)
+
     def test_incomplete_blob_and_changing_head(self):
         api = FakeAPI()
         original = api.get
@@ -136,7 +157,7 @@ class Tests(unittest.TestCase):
                 def get(path):
                     return http.get(path) if path.startswith('git/blobs/') else original(path)
                 with patch.object(api, 'get', side_effect=get), \
-                     patch.object(m.urllib.request, 'urlopen', return_value=io.BytesIO(raw)):
+                     patch.object(m.urllib.request, 'urlopen', side_effect=lambda *args, **kwargs: io.BytesIO(raw)):
                     if size == m.LIMIT:
                         guard = m.Guard('orchid.example')
                         m.inspect_pr(api, guard, 1)
@@ -159,6 +180,15 @@ class Tests(unittest.TestCase):
                 api.pages('pulls/1/commits', cap=250)
         with patch.object(api, 'get', side_effect=[[{}] * 100, [{}] * 100, [{}] * 49]):
             self.assertEqual(len(api.pages('pulls/1/commits', cap=250)), 249)
+
+    def test_commit_file_pagination_fails_closed_at_cap(self):
+        api = m.API('example/repository', 'fake')
+        item = {'status': 'added', 'filename': 'example.txt', 'sha': 'b' * 40}
+        with patch.object(api, 'get', side_effect=[{'files': [item] * 100},
+                                                       {'files': [item] * 100},
+                                                       {'files': [item] * 50}]):
+            with self.assertRaisesRegex(ValueError, 'commit file limit'):
+                api.commit_files('a' * 40, cap=250)
 
     def test_failures_do_not_echo_input(self):
         with tempfile.NamedTemporaryFile(mode='w') as event:

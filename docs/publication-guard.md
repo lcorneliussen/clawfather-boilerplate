@@ -20,7 +20,8 @@ thing after deriving — the leak check can only refuse what it knows.
 ## After it arrives: the publication guard (boilerplate side)
 
 `.github/workflows/publication-guard.yml` scans every PR (title, body,
-branch, commit messages, changed file names and complete contents), issue,
+branch, commit messages, and changed file names and complete contents at every
+PR commit), issue,
 comment and review for the literal terms in the repository secret
 `PUBLICATION_FORBIDDEN_TERMS` (one per line; NFKC-normalised, case-folded).
 A match fails the check with a generic message — no term, snippet or file
