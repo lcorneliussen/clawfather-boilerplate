@@ -16,6 +16,7 @@ upstream: tests/
 upstream: docs/
 upstream: .clawfather/ownership
 upstream: LICENSE
+upstream: .gitignore        # sites add ignores in site/.gitignore
 upstream: site/claw.env.example
 upstream: site/configure.d/README.md
 upstream: site/workspaces/README.md

@@ -58,14 +58,19 @@ load_state() {
   : "${UPSTREAM_URL:?}" "${UPSTREAM_REF:?}"
 }
 
-# Upstream-owned pathspecs, minus the ones this repository skipped.
+# Upstream-owned pathspecs, minus the ones this repository skipped. With a
+# REF, the ownership map at that boilerplate commit counts too: an upgrade
+# that makes a new path upstream-owned must bring that path along.
 owned_paths() {
-  local line skip
+  local ref="${1:-}" line skip
   [[ -f "$ownership" ]] || die "$ownership missing"
-  while IFS= read -r line; do
+  {
+    cat "$ownership"
+    [[ -z "$ref" ]] || git show "$ref:$ownership" 2>/dev/null || true
+  } | while IFS= read -r line; do
     line="${line%%#*}"; line="${line//[[:space:]]/}"
     [[ "$line" == upstream:* ]] && printf '%s\n' "${line#upstream:}"
-  done < "$ownership"
+  done | awk '!seen[$0]++'
   for skip in ${UPSTREAM_SKIP:-}; do
     printf ':(exclude)%s\n' "$skip"
   done
@@ -73,10 +78,10 @@ owned_paths() {
 
 # fetch REF — fetch a boilerplate branch, tag or commit; print its commit.
 # Fill the array `paths` (bash 3 has no mapfile; macOS still ships it).
-read_paths() {
+read_paths() { # [REF]
   paths=()
   local p
-  while IFS= read -r p; do paths+=("$p"); done < <(owned_paths)
+  while IFS= read -r p; do paths+=("$p"); done < <(owned_paths "${1:-}")
 }
 
 fetch() {
@@ -137,7 +142,7 @@ cmd_status() {
   local target paths
   target="$(fetch "${1:-main}")"
   require_descendant "$target"
-  read_paths
+  read_paths "$target"
   echo "base:     $(git log -1 --format='%h %ad %s' --date=short "$UPSTREAM_REF")"
   echo "upstream: $(git log -1 --format='%h %ad %s' --date=short "$target")"
   echo
@@ -154,7 +159,7 @@ cmd_diff() {
   local target paths
   target="$(fetch "${1:-main}")"
   require_descendant "$target"
-  read_paths
+  read_paths "$target"
   git diff "$UPSTREAM_REF" "$target" -- "${paths[@]}"
 }
 
@@ -167,7 +172,7 @@ cmd_apply() {
   target="$(fetch "${1:-main}")"
   require_descendant "$target"
   [[ "$target" != "$(git rev-parse "$UPSTREAM_REF")" ]] || { say "already at $(git rev-parse --short "$target")"; return; }
-  read_paths
+  read_paths "$target"
   patch="$(mktemp)"
   # Expanded now: `patch` is local and gone by the time EXIT fires.
   # shellcheck disable=SC2064
