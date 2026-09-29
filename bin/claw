@@ -4,12 +4,12 @@
 # Upstream-owned. Everything that touches the gateway goes through here, so
 # the runtime contract (env, mounts, hardening) lives in exactly one place:
 # the composed files core/compose.yml + hosting/<profile>/compose.yml +
-# site/compose.yml. CI deploys by syncing the repository to the host and
+# instance/compose.yml. CI deploys by syncing the repository to the host and
 # running `bin/claw deploy` there; an operator runs the same command.
 #
 # Configuration, in load order (later wins):
 #   hosting/<profile>/profile.env   profile defaults (auth mode, data root, …)
-#   site/claw.env                   this deployment — committed, non-secret
+#   instance/claw.env               this deployment — committed, non-secret
 #   .secrets/claw.env               this deployment's secrets — ignored by git
 # The environment of the caller wins over all three.
 set -euo pipefail
@@ -23,7 +23,7 @@ Usage: bin/claw <command> [args]
 
 Lifecycle
   init              create the data directories (and a local token, in token mode)
-  build [--push]    build the core image, then the site image FROM it
+  build [--push]    build the core image, then the instance image FROM it
   deploy            the full, ordered rollout — see below
   up | down         start / stop every service
   status            compose ps
@@ -34,7 +34,7 @@ Lifecycle
 Gateway operations (one-off containers with the gateway's exact contract)
   openclaw ARGS...  run the OpenClaw CLI against the state
   configure         build and validate the next config (not yet live)
-  sync-workspaces   copy site/workspaces/<agent>/ into the agents' workspaces
+  sync-workspaces   copy instance/workspaces/<agent>/ into the agents' workspaces
   backup            stop the gateway, write a verified backup, restart it
   doctor            offline migrations with the gateway stopped
 
@@ -54,10 +54,10 @@ say() { echo "claw: $*" >&2; }
 load_env() {
   local file
   # The profile must be known before its defaults can be read.
-  if [[ -z "${CLAW_PROFILE:-}" && -f "$CLAW_REPO/site/claw.env" ]]; then
-    CLAW_PROFILE="$(sed -n 's/^CLAW_PROFILE=//p' "$CLAW_REPO/site/claw.env" | tail -1)"
+  if [[ -z "${CLAW_PROFILE:-}" && -f "$CLAW_REPO/instance/claw.env" ]]; then
+    CLAW_PROFILE="$(sed -n 's/^CLAW_PROFILE=//p' "$CLAW_REPO/instance/claw.env" | tail -1)"
   fi
-  : "${CLAW_PROFILE:?set CLAW_PROFILE in site/claw.env (local, azure, hetzner-cloudflare)}"
+  : "${CLAW_PROFILE:?set CLAW_PROFILE in instance/claw.env (local, azure, hetzner-cloudflare)}"
   [[ -d "$CLAW_REPO/hosting/$CLAW_PROFILE" ]] || die "unknown profile: $CLAW_PROFILE"
 
   # Caller env wins: remember what was set before sourcing anything.
@@ -67,7 +67,7 @@ load_env() {
   saved="$(export -p | sed 's/^declare -x /export /')"
   set -a
   for file in "$CLAW_REPO/hosting/$CLAW_PROFILE/profile.env" \
-              "$CLAW_REPO/site/claw.env" \
+              "$CLAW_REPO/instance/claw.env" \
               "$CLAW_REPO/.secrets/claw.env"; do
     # shellcheck disable=SC1090
     [[ -f "$file" ]] && . "$file"
@@ -80,17 +80,24 @@ load_env() {
   # (.secrets/claw.env does not exist on a fresh checkout.)
   CLAW_ENV_NAMES=""
   for file in "$CLAW_REPO/hosting/$CLAW_PROFILE/profile.env" \
-              "$CLAW_REPO/site/claw.env" "$CLAW_REPO/.secrets/claw.env"; do
+              "$CLAW_REPO/instance/claw.env" "$CLAW_REPO/.secrets/claw.env"; do
     [[ -f "$file" ]] || continue
     CLAW_ENV_NAMES+=" $(sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "$file" | tr '\n' ' ')"
   done
 
-  : "${CLAW_INSTANCE:?set CLAW_INSTANCE in site/claw.env}"
+  : "${CLAW_INSTANCE:?set CLAW_INSTANCE in instance/claw.env}"
   [[ "$CLAW_INSTANCE" =~ ^[a-z][a-z0-9-]*$ ]] || die "CLAW_INSTANCE must be lowercase [a-z0-9-]"
   export CLAW_PROFILE CLAW_INSTANCE
   export CLAW_DATA="${CLAW_DATA:-/srv/$CLAW_INSTANCE}"
   [[ "$CLAW_DATA" = /* ]] || CLAW_DATA="$CLAW_REPO/$CLAW_DATA"
   export CLAW_PORT="${CLAW_PORT:-18789}"
+  # Hosted profiles run one claw per host on the pinned default subnet (their
+  # trusted proxy has a fixed address in it). Local profiles pin nothing, and
+  # several claws may share one Docker, so each instance gets its own /24.
+  if [[ -z "${CLAW_SUBNET:-}" && "${CLAW_AUTH_MODE:-}" == token ]]; then
+    local octet=$(( $(printf '%s' "$CLAW_INSTANCE" | cksum | cut -d' ' -f1) % 200 + 40 ))
+    export CLAW_SUBNET="172.30.$octet.0/24" CLAW_IP_RANGE="172.30.$octet.128/25"
+  fi
   export CLAW_IMAGE_NAME="${CLAW_IMAGE_NAME:-$CLAW_INSTANCE-openclaw}"
   export CLAW_IMAGE_TAG="${CLAW_IMAGE_TAG:-local}"
   export CLAW_IMAGE="${CLAW_IMAGE:-$CLAW_IMAGE_NAME:$CLAW_IMAGE_TAG}"
@@ -102,7 +109,7 @@ compose() {
     --project-directory "$CLAW_REPO" \
     -f "$CLAW_REPO/core/compose.yml" \
     -f "$CLAW_REPO/hosting/$CLAW_PROFILE/compose.yml" \
-    -f "$CLAW_REPO/site/compose.yml" \
+    -f "$CLAW_REPO/instance/compose.yml" \
     "$@"
 }
 
@@ -115,8 +122,8 @@ run_claw() {
   done
   compose run --rm --no-deps -T "${env_args[@]}" \
     -v "$CLAW_REPO/core/configure:/claw/core/configure:ro" \
-    -v "$CLAW_REPO/site/configure.d:/claw/site/configure.d:ro" \
-    -v "$CLAW_REPO/site/workspaces:/claw/site/workspaces:ro" \
+    -v "$CLAW_REPO/instance/configure.d:/claw/instance/configure.d:ro" \
+    -v "$CLAW_REPO/instance/workspaces:/claw/instance/workspaces:ro" \
     claw "$@"
 }
 
@@ -131,7 +138,7 @@ gateway_stop() { compose stop claw >/dev/null 2>&1 || true; }
 cmd_init() {
   local dirs=(state workspace workspaces auth-profile-secrets gh-config backups) d sudo=()
   local missing=()
-  # Sites that mount more data (site/compose.yml) list the extra directories
+  # Instances that mount more data (instance/compose.yml) list the extra directories
   # in CLAW_EXTRA_DATA_DIRS, space-separated, relative to CLAW_DATA.
   # shellcheck disable=SC2206
   dirs+=(${CLAW_EXTRA_DATA_DIRS:-})
@@ -168,10 +175,10 @@ cmd_build() {
   docker build "${args[@]}" \
     ${OPENCLAW_IMAGE:+--build-arg "OPENCLAW_IMAGE=$OPENCLAW_IMAGE"} \
     --tag "$CLAW_CORE_IMAGE" "$CLAW_REPO/core/image"
-  # The site image builds FROM the local core image, so no --pull here.
+  # The instance image builds FROM the local core image, so no --pull here.
   docker build ${CLAW_PLATFORM:+--platform "$CLAW_PLATFORM"} \
     --build-arg "CORE_IMAGE=$CLAW_CORE_IMAGE" \
-    --tag "$CLAW_IMAGE" --file "$CLAW_REPO/site/image/Dockerfile" "$CLAW_REPO"
+    --tag "$CLAW_IMAGE" --file "$CLAW_REPO/instance/image/Dockerfile" "$CLAW_REPO"
   if $push; then docker push "$CLAW_IMAGE"; fi
 }
 
@@ -180,11 +187,11 @@ cmd_configure() {
 }
 
 cmd_sync_workspaces() {
-  # Files in site/workspaces/<agent>/ replace their copies in the agent's
+  # Files in instance/workspaces/<agent>/ replace their copies in the agent's
   # workspace; whatever the agent wrote itself (memory, notes) is left alone.
   # shellcheck disable=SC2016 # expanded inside the container
   run_claw sh -euc '
-    cd /claw/site/workspaces
+    cd /claw/instance/workspaces
     for agent in */; do
       [ -d "$agent" ] || continue
       mkdir -p "/home/node/.openclaw/workspaces/$agent"
@@ -255,7 +262,7 @@ cmd_deploy() {
        ! docker pull "$CLAW_IMAGE" >/dev/null 2>&1; }; then
     cmd_build
   fi
-  # Front-door and site services; the gateway image was handled above.
+  # Front-door and instance services; the gateway image was handled above.
   local others
   others="$(compose config --services | grep -vx claw || true)"
   # shellcheck disable=SC2086 # one service name per word
