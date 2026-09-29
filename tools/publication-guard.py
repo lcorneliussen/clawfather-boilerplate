@@ -82,7 +82,9 @@ def inspect_pr(api, guard, number):
     if not re.fullmatch('[0-9a-f]{40}', head):
         raise ValueError('invalid head')
     for commit in api.pages(path + '/commits', cap=250):
-        guard.scan(commit['commit']['message'])
+        # Author and committer identities persist in public history too.
+        data = commit['commit']
+        guard.scan([data['message'], data.get('author'), data.get('committer')])
     for file in api.pages(path + '/files'):
         # Removed names/content do not block cleanup of an earlier disclosure.
         if file['status'] == 'removed':

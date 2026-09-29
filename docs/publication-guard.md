@@ -43,5 +43,6 @@ Both match text. Neither understands a paraphrase ("our billing product"),
 reads images or archives, or removes anything once published: the guard
 detects after publication, it does not prevent it. Read what you publish.
 
-Ported from wtc-boilerplate's publication guard; `tools/publication-guard.py`
-and `tests/publication_guard_test.py` are kept identical to it.
+Ported from wtc-boilerplate's publication guard. `tools/publication-guard.py`
+and `tests/publication_guard_test.py` match it except that commit author and
+committer identities are scanned too; keep the two in step.

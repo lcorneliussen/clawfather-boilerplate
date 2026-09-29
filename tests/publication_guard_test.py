@@ -59,7 +59,7 @@ class Tests(unittest.TestCase):
                 self.assertTrue(guard.found)
 
     def test_pr_surfaces(self):
-        for surface in ('title', 'body', 'ref', 'content', 'filename', 'commit', 'comment'):
+        for surface in ('title', 'body', 'ref', 'content', 'filename', 'commit', 'author', 'committer', 'comment'):
             with self.subTest(surface=surface):
                 api = FakeAPI()
                 if surface in ('title', 'body'):
@@ -72,6 +72,8 @@ class Tests(unittest.TestCase):
                     api.file['filename'] = 'Orchid.Example'
                 elif surface == 'commit':
                     api.messages[0]['commit']['message'] = 'Orchid.Example'
+                elif surface in ('author', 'committer'):
+                    api.messages[0]['commit'][surface] = {'name': 'Someone', 'email': 'dev@orchid.example'}
                 else:
                     api.comments = [{'body': 'Orchid.Example'}]
                 guard = m.Guard('orchid.example')
