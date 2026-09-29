@@ -1,0 +1,16 @@
+# Site additions to the runtime. Site-owned; the boilerplate ships it empty.
+#
+# Merged after core/compose.yml and hosting/<profile>/compose.yml, so this is
+# where a deployment adds services, env or mounts without editing upstream
+# files. Examples (see docs/extension-points.md):
+#
+#   services:
+#     claw:
+#       environment:
+#         PGHOST: dev-db
+#       volumes:
+#         - ${CLAW_DATA}/bundle:/home/node/.bundle   # + CLAW_EXTRA_DATA_DIRS=bundle
+#     dev-db:
+#       image: postgres:17-bookworm
+#       networks: [claw]
+services: {}

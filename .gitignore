@@ -1,0 +1,19 @@
+# Local runtime data (local profile) and secrets — never committed.
+/.data/
+/.secrets/
+
+# Hosting profile artefacts
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+!*.tfvars.example
+backend.hcl
+# The site's non-secret OpenTofu inputs are committed (CI reads them).
+!site/infra/terraform.tfvars
+!site/infra/backend.hcl
+*.retry
+hosting/*/ansible/inventory.yml
+
+.DS_Store
