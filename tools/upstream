@@ -38,9 +38,10 @@ Upgrade (boilerplate → this repository)
 Backport (this repository → boilerplate)
   divergence [--patch]
                       where upstream-owned paths differ from UPSTREAM_REF
-  backport RANGE [-o DIR]
+  backport RANGE [-o NEW_DIR] [--author "Name <email>"]
                       export commits in RANGE, limited to upstream-owned paths,
-                      as patches for the boilerplate — after a leak check
+                      as patches for the boilerplate, authored as you (default:
+                      git config user.name/email) — after a leak check
 
 REF defaults to the boilerplate's main. Apply leaves the result staged and
 uncommitted; conflicts are marked in the files like a merge.
@@ -106,11 +107,11 @@ write_state() {
 }
 
 cmd_init() {
-  local ref=""
+  local ref="" skips=""
   while (($#)); do
     case "$1" in
       --ref) ref="${2:?--ref needs a commit}"; shift 2 ;;
-      --skip) UPSTREAM_SKIP="${UPSTREAM_SKIP:+$UPSTREAM_SKIP }${2:?--skip needs a path}"; shift 2 ;;
+      --skip) skips="${skips:+$skips }${2:?--skip needs a path}"; shift 2 ;;
       *) die "init: unknown argument $1" ;;
     esac
   done
@@ -118,6 +119,11 @@ cmd_init() {
     # shellcheck disable=SC1090
     . "$state"
   fi
+  # Skips given now add to the recorded ones (sourcing the state above would
+  # otherwise have replaced them).
+  # shellcheck disable=SC2086 # word-split the space-separated lists
+  UPSTREAM_SKIP="$(printf '%s\n' ${UPSTREAM_SKIP:-} $skips | awk 'NF && !seen[$0]++' | tr '\n' ' ')"
+  UPSTREAM_SKIP="${UPSTREAM_SKIP% }"
   UPSTREAM_URL="${UPSTREAM_URL:-https://github.com/lcorneliussen/clawfather-boilerplate.git}"
   local target
   target="$(fetch "${ref:-main}")"
@@ -222,34 +228,80 @@ leak_patterns() {
   return 0
 }
 
-# Every e-mail address in FILE except the public kinds: no-reply addresses
-# (attribution trailers) and example domains.
+# Every e-mail address in FILE that is not explicitly public: the publishing
+# author (set by backport), attribution no-reply addresses of GitHub and
+# Anthropic, example domains, and whatever .clawfather/public-emails lists
+# (one address or @domain per line).
 leaked_emails() {
-  sed '1,/^Subject:/{/^Subject:/!d;}' "$1" |
-    grep -Eo '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' |
-    grep -Eiv '^(no-?reply|[0-9]+\+[^@]+)@|@users\.noreply\.github\.com$|@example\.(com|org|net)$' |
-    sort -u
+  local file="$1" author_email="$2" allowed
+  allowed="$(printf '%s\n' "$author_email" noreply@anthropic.com @users.noreply.github.com \
+      @example.com @example.org @example.net
+    [[ -f .clawfather/public-emails ]] && grep -v '^[[:space:]]*\(#\|$\)' .clawfather/public-emails)"
+  grep -Eo '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' "$file" | sort -u |
+    while IFS= read -r email; do
+      local lower entry ok=false
+      lower="$(tr '[:upper:]' '[:lower:]' <<<"$email")"
+      while IFS= read -r entry; do
+        entry="$(tr '[:upper:]' '[:lower:]' <<<"$entry")"
+        [[ -n "$entry" ]] || continue
+        if [[ "$entry" == @* && "$lower" == *"$entry" ]] || [[ "$lower" == "$entry" ]]; then
+          ok=true; break
+        fi
+      done <<<"$allowed"
+      $ok || printf '%s\n' "$email"
+    done
 }
 
 cmd_backport() {
   load_state
-  local range="${1:?backport needs a commit range, e.g. HEAD~2..HEAD or <sha>^!}" out="" paths
-  shift
-  [[ "${1:-}" == -o ]] && out="${2:?-o needs a directory}"
-  out="${out:-$(mktemp -d)}"
+  local range="" out="" author="" paths
+  while (($#)); do
+    case "$1" in
+      -o) out="${2:?-o needs a directory}"; shift 2 ;;
+      --author) author="${2:?--author needs \"Name <email>\"}"; shift 2 ;;
+      -*) die "backport: unknown option $1" ;;
+      *) range="$1"; shift ;;
+    esac
+  done
+  [[ -n "$range" ]] || die "backport needs a commit range, e.g. HEAD~2..HEAD or <sha>^!"
+
+  # The public history gets the publisher's identity, never the original
+  # authors': a derived claw's contributors are private. Default: this
+  # repository's configured identity.
+  author="${author:-$(git config user.name) <$(git config user.email)>}"
+  [[ "$author" =~ ^[^\<\>]+\ \<[^\<\>@]+@[^\<\>]+\>$ ]] || die "author must look like \"Name <email>\": $author"
+  local author_email="${author##*<}"; author_email="${author_email%>}"
+
+  # A fresh directory only: stale patches would be checked and applied as if
+  # they belonged to this range.
+  if [[ -n "$out" ]]; then
+    [[ ! -e "$out" ]] || [[ -z "$(ls -A "$out")" ]] || die "$out is not empty; give a new directory"
+  else
+    out="$(mktemp -d)"
+  fi
   read_paths
   install -d "$out"
   git format-patch --quiet --no-stat --output-directory "$out" "$range" -- "${paths[@]}" >/dev/null
   local patches=("$out"/*.patch)
   [[ -e "${patches[0]}" ]] || die "no commits in $range touch upstream-owned paths"
 
-  # Check what leaves: the diff and the message, not the From/Date header
-  # (that is the author, rewritten by `git am` on the other side anyway).
-  local hits=0 pattern file
+  local file
+  for file in "${patches[@]}"; do
+    # First From: header only; `git am` takes the author from it.
+    awk -v a="From: $author" '!done && /^From: / { print a; done = 1; next } { print }' \
+      "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+  done
+
+  # The whole patch leaves — headers, message, diff — so the whole patch is
+  # checked. A pattern grep cannot parse stops the export: a check that
+  # cannot run must not pass.
+  local hits=0 pattern status
   while IFS= read -r pattern; do
     [[ -n "$pattern" ]] || continue
+    status=0; grep -Eq -- "$pattern" /dev/null 2>/dev/null || status=$?
+    ((status != 2)) || die "leak check: invalid pattern /$pattern/ — fix it in .clawfather/private-terms"
     for file in "${patches[@]}"; do
-      if sed '1,/^Subject:/{/^Subject:/!d;}' "$file" | grep -Eiq -- "$pattern"; then
+      if grep -Eiq -- "$pattern" "$file"; then
         say "leak check: /$pattern/ matches in ${file##*/}"
         hits=$((hits + 1))
       fi
@@ -261,11 +313,11 @@ cmd_backport() {
       [[ -n "$email" ]] || continue
       say "leak check: e-mail $email in ${file##*/}"
       hits=$((hits + 1))
-    done < <(leaked_emails "$file")
+    done < <(leaked_emails "$file" "$author_email")
   done
   ((hits == 0)) || die "$hits leak-check hit(s) — generalize the change, then export again (patches left in $out)"
 
-  say "${#patches[@]} patch(es) in $out, limited to upstream-owned paths"
+  say "${#patches[@]} patch(es) in $out, limited to upstream-owned paths, authored as $author"
   say "in a boilerplate checkout: git switch -c <slug> && git am -3 $out/*.patch"
   say "then open a PR there; name no private deployment in it"
 }
