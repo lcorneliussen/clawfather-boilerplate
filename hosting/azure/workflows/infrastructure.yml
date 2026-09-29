@@ -58,7 +58,8 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - run: az bicep install
+      # Pinned like every other tool; bump with hosting/azure/check.
+      - run: az bicep install --version v0.47.16
 
       # Note: an apply rewrites the NSG rule set, removing a deploy run's
       # temporary SSH rule if one is live at that moment. Rerun that deploy.
