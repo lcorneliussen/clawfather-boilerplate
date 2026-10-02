@@ -67,6 +67,11 @@ config** built and validated beside the live one, stop, publish, **offline
 doctor**, start, health — and it restores the previous config if the new one
 does not come up healthy. `bin/claw --help` lists the rest.
 
+Backup, doctor and deployment refuse offline state changes when the gateway
+cannot be stopped or its stopped state cannot be verified. This checks the
+Compose gateway only; instances with other writers still need to coordinate
+those writers before running offline operations.
+
 ## Deriving your own
 
 [docs/deriving.md](docs/deriving.md). Then:
