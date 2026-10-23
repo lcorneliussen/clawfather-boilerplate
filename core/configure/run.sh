@@ -4,12 +4,15 @@
 # $CLAW_CANDIDATE for `bin/claw` to publish while the gateway is stopped.
 # The running gateway never observes an intermediate state.
 #
-# Runs INSIDE the claw image (`bin/claw configure`). Steps run in name order:
-# all of core/configure/steps/*.sh, then all of instance/configure.d/*.sh — so an
-# instance step can override anything a core step set.
+# Runs INSIDE the claw image (`bin/claw configure`): in the running gateway's
+# container when there is one, else in a one-off container. Steps run in name
+# order: all of core/configure/steps/*.sh, then all of instance/configure.d/*.sh
+# — so an instance step can override anything a core step set. The scripts are
+# under $CLAW_CONFIGURE_ROOT (/claw in a one-off container).
 #
 # Upstream-owned.
 set -eu
+root="${CLAW_CONFIGURE_ROOT:-/claw}"
 
 state=/home/node/.openclaw
 live="$state/openclaw.json"
@@ -22,11 +25,11 @@ chmod 0600 "$staged"
 export OPENCLAW_CONFIG_PATH="$staged"
 
 # shellcheck source=core/configure/lib.sh
-. /claw/core/configure/lib.sh
+. "$root/core/configure/lib.sh"
 
-for step in /claw/core/configure/steps/*.sh /claw/instance/configure.d/*.sh; do
+for step in "$root"/core/configure/steps/*.sh "$root"/instance/configure.d/*.sh; do
   [ -f "$step" ] || continue
-  log "${step#/claw/}"
+  log "${step#"$root"/}"
   # shellcheck disable=SC1090
   . "$step"
 done

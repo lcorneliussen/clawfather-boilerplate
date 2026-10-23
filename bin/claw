@@ -198,7 +198,25 @@ cmd_build() {
 }
 
 cmd_configure() {
-  run_claw sh /claw/core/configure/run.sh
+  if ! gateway_running; then
+    run_claw sh /claw/core/configure/run.sh
+    return
+  fi
+  # A running gateway owns its state: OpenClaw refuses to read its config from
+  # another container ("different PID namespace"). Build the candidate inside
+  # the gateway's container, from a copy of the configure scripts.
+  # Just (re)started, as after a backup, it is still busy with its state.
+  cmd_health >/dev/null
+  local c name env_args=()
+  c="$(gateway_container)"
+  for name in $CLAW_ENV_NAMES CLAW_PROFILE CLAW_INSTANCE CLAW_PORT; do
+    env_args+=(-e "$name")
+  done
+  docker exec "$c" sh -c 'rm -rf /tmp/claw-configure && mkdir -p /tmp/claw-configure'
+  tar -C "$CLAW_REPO" -cf - core/configure instance/configure.d |
+    docker exec -i "$c" tar -xf - -C /tmp/claw-configure
+  docker exec "${env_args[@]}" -e CLAW_CONFIGURE_ROOT=/tmp/claw-configure "$c" \
+    sh /tmp/claw-configure/core/configure/run.sh
 }
 
 cmd_sync_workspaces() {
