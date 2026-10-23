@@ -197,6 +197,18 @@ cmd_build() {
   if $push; then docker push "$CLAW_IMAGE"; fi
 }
 
+# The OpenClaw CLI against the state: inside a running gateway, which
+# refuses readers from other containers; else in a one-off container.
+cmd_openclaw() {
+  if gateway_running; then
+    local tty=()
+    [[ -t 0 && -t 1 ]] && tty=(-it)
+    docker exec "${tty[@]}" "$(gateway_container)" node dist/index.js "$@"
+  else
+    run_claw node dist/index.js "$@"
+  fi
+}
+
 cmd_configure() {
   if ! gateway_running; then
     run_claw sh /claw/core/configure/run.sh
@@ -355,7 +367,7 @@ main() {
     logs) compose logs -f "${@:-claw}" ;;
     health) cmd_health "$@" ;;
     open) cmd_open ;;
-    openclaw) run_claw node dist/index.js "$@" ;;
+    openclaw) cmd_openclaw "$@" ;;
     configure) cmd_configure ;;
     sync-workspaces) cmd_sync_workspaces ;;
     backup) cmd_backup ;;
