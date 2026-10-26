@@ -197,8 +197,38 @@ cmd_build() {
   if $push; then docker push "$CLAW_IMAGE"; fi
 }
 
+# The OpenClaw CLI against the state: inside a running gateway, which
+# refuses readers from other containers; else in a one-off container.
+cmd_openclaw() {
+  if gateway_running; then
+    local tty=()
+    [[ -t 0 && -t 1 ]] && tty=(-it)
+    docker exec "${tty[@]}" "$(gateway_container)" node dist/index.js "$@"
+  else
+    run_claw node dist/index.js "$@"
+  fi
+}
+
 cmd_configure() {
-  run_claw sh /claw/core/configure/run.sh
+  if ! gateway_running; then
+    run_claw sh /claw/core/configure/run.sh
+    return
+  fi
+  # A running gateway owns its state: OpenClaw refuses to read its config from
+  # another container ("different PID namespace"). Build the candidate inside
+  # the gateway's container, from a copy of the configure scripts.
+  # Just (re)started, as after a backup, it is still busy with its state.
+  cmd_health >/dev/null
+  local c name env_args=()
+  c="$(gateway_container)"
+  for name in $CLAW_ENV_NAMES CLAW_PROFILE CLAW_INSTANCE CLAW_PORT; do
+    env_args+=(-e "$name")
+  done
+  docker exec "$c" sh -c 'rm -rf /tmp/claw-configure && mkdir -p /tmp/claw-configure'
+  tar -C "$CLAW_REPO" -cf - core/configure instance/configure.d |
+    docker exec -i "$c" tar -xf - -C /tmp/claw-configure
+  docker exec "${env_args[@]}" -e CLAW_CONFIGURE_ROOT=/tmp/claw-configure "$c" \
+    sh /tmp/claw-configure/core/configure/run.sh
 }
 
 cmd_sync_workspaces() {
@@ -337,7 +367,7 @@ main() {
     logs) compose logs -f "${@:-claw}" ;;
     health) cmd_health "$@" ;;
     open) cmd_open ;;
-    openclaw) run_claw node dist/index.js "$@" ;;
+    openclaw) cmd_openclaw "$@" ;;
     configure) cmd_configure ;;
     sync-workspaces) cmd_sync_workspaces ;;
     backup) cmd_backup ;;
